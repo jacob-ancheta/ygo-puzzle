@@ -1,6 +1,7 @@
-*.o
 *.dll
-*.pdb
+*.o
 __pycache__/
 *.pyc
 .venv/
+ygopro-core/
+ygopro-scripts/
