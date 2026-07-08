@@ -1,0 +1,6 @@
+*.o
+*.dll
+*.pdb
+__pycache__/
+*.pyc
+.venv/
