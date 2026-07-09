@@ -6,12 +6,13 @@ Usage:
     python card_lookup.py dharc
     python card_lookup.py "knightmare cerberus"
 """
+import os
 import sqlite3
 import sys
 
 from card_convert import decode_type
 
-DB_PATH = "cards.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.db")
 
 def search_cards(query, limit=15):
     conn = sqlite3.connect(DB_PATH)
@@ -25,7 +26,7 @@ def search_cards(query, limit=15):
     return rows
 
 CARD_COLS = ["code", "name", "type", "level", "attribute", "race", "attack", "defense",
-             "link_marker", "setcode", "alias", "lscale", "rscale"]
+             "link_marker", "setcode", "alias", "lscale", "rscale", "desc"]
 
 def get_card_by_name(name):
     """Exact-match lookup for puzzle authoring. Returns None if no exact match

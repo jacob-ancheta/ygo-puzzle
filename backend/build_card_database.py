@@ -60,7 +60,7 @@ def build_db(cdb_path):
     src = sqlite3.connect(cdb_path)
     src_cur = src.cursor()
     src_cur.execute("""
-        SELECT d.id, d.alias, d.setcode, d.type, d.atk, d.def, d.level, d.race, d.attribute, t.name
+        SELECT d.id, d.alias, d.setcode, d.type, d.atk, d.def, d.level, d.race, d.attribute, t.name, t.desc
         FROM datas d JOIN texts t ON d.id = t.id
     """)
     rows = src_cur.fetchall()
@@ -75,22 +75,23 @@ def build_db(cdb_path):
             name TEXT NOT NULL,
             type INTEGER, level INTEGER, attribute INTEGER, race INTEGER,
             attack INTEGER, defense INTEGER, link_marker INTEGER,
-            setcode INTEGER, alias INTEGER, lscale INTEGER, rscale INTEGER
+            setcode INTEGER, alias INTEGER, lscale INTEGER, rscale INTEGER,
+            desc TEXT
         )
     """)
     cur.execute("CREATE INDEX idx_name ON cards(name)")
 
     out_rows = []
-    for *data_cols, name in rows:
+    for *data_cols, name, desc in rows:
         e = decode_row(tuple(data_cols))
         out_rows.append((
             e["code"], name, e["type"], e["level"], e["attribute"], e["race"],
             e["attack"], e["defense"], e["link_marker"], e["setcode"], e["alias"],
-            e["lscale"], e["rscale"],
+            e["lscale"], e["rscale"], desc,
         ))
 
     cur.executemany(
-        "INSERT OR REPLACE INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", out_rows
+        "INSERT OR REPLACE INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", out_rows
     )
     conn.commit()
     conn.close()

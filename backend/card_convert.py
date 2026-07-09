@@ -2,7 +2,7 @@
 Type bitmask constants and human-readable decoding, matching ygopro-core's
 raw engine encoding (see card_data.h). cards.db stores these bitmasks
 directly (sourced from the official cards.cdb), so no conversion is needed
-to load a card -- this module is just for display purposes.
+to load a card, this module is just for display purposes.
 """
 
 TYPE_MONSTER=0x1; TYPE_SPELL=0x2; TYPE_TRAP=0x4

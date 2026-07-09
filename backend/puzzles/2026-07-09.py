@@ -1,11 +1,13 @@
 """
-Define today's puzzle here by card NAME (not code) -- the loader resolves
-names against cards.db at load time and will tell you immediately if a
-name doesn't match exactly, before it ever touches the engine.
+Define a puzzle here by card NAME (not code) -- the loader resolves names
+against cards.db at load time and will tell you immediately if a name
+doesn't match exactly, before it ever touches the engine.
+
+The filename (YYYY-MM-DD.py) is the date this puzzle is served on.
 """
 
 PUZZLE = {
-    "lp": {"player": 8000, "opponent": 5000},
+    "lp": {"player": 8000, "opponent": 7000},
 
     # opponent's board -- position is "attack" or "defense".
     # "summoned" is optional and controls the card's summon history, since

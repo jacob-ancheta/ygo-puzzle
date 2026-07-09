@@ -3,7 +3,9 @@ import ctypes
 from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Structure, CFUNCTYPE
 
 from card_lookup import get_card, get_card_by_name, search_cards
-from puzzle_definition import PUZZLE
+from puzzle_registry import resolve_puzzle_for
+
+_puzzle_date, PUZZLE = resolve_puzzle_for()
 
 try:
     from local_config import MINGW_BIN, DLL_PATH, SCRIPTS_DIR
@@ -172,7 +174,7 @@ if PUZZLE_SETUP_SCRIPT:
     lib.preload_script.restype = ctypes.c_int32
     lib.preload_script(ctypes.c_ssize_t(pduel), PUZZLE_SETUP_SCRIPT_NAME.encode())
 
-print(f"\nPuzzle loaded. {PUZZLE['win_condition']}\n")
+print(f"\nPuzzle loaded ({_puzzle_date}). {PUZZLE['win_condition']}\n")
 
 # ---------- message protocol ----------
 MSG_RETRY = 1

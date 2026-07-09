@@ -4,7 +4,9 @@ import ctypes
 from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Structure, CFUNCTYPE
 
 from card_lookup import get_card, get_card_by_name, search_cards
-from puzzle_definition import PUZZLE
+from puzzle_registry import resolve_puzzle_for
+
+_puzzle_date, PUZZLE = resolve_puzzle_for()
 
 try:
     from local_config import MINGW_BIN, DLL_PATH, SCRIPTS_DIR
@@ -46,7 +48,7 @@ def resolve_all(puzzle):
             for code, cname, type_int, atk, deff, level in search_cards(name, limit=5):
                 print(f"    {code:>10}  {cname}")
         print("=" * 60)
-        print("Fix the names in puzzle_definition.py (copy the exact name from")
+        print("Fix the names in the puzzle's file under puzzles/ (copy the exact name from")
         print("the matches above) and rerun. Nothing was loaded into the engine.")
         sys.exit(1)
     print(f"All {len(resolved)} card names resolved cleanly. Loading the duel...\n")
