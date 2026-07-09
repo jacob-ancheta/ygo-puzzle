@@ -63,6 +63,34 @@ def parse_spelltrap_type(type_str, subtype):
         sub_map = {"Continuous": TYPE_CONTINUOUS, "Counter": TYPE_COUNTER}
     return t | sub_map.get(subtype, 0)
 
+def decode_type(type_int):
+    """Turn the engine's type bitmask back into a short human-readable label."""
+    if type_int & TYPE_MONSTER:
+        kinds = []
+        for bit, label in [
+            (TYPE_XYZ, "XYZ"), (TYPE_LINK, "Link"), (TYPE_SYNCHRO, "Synchro"),
+            (TYPE_FUSION, "Fusion"), (TYPE_RITUAL, "Ritual"),
+        ]:
+            if type_int & bit:
+                kinds.append(label)
+        if type_int & TYPE_EFFECT and not kinds:
+            kinds.append("Effect")
+        elif type_int & TYPE_NORMAL:
+            kinds.append("Normal")
+        return "Monster" + (" (" + "/".join(kinds) + ")" if kinds else "")
+    if type_int & TYPE_SPELL:
+        for bit, label in [(TYPE_QUICKPLAY, "Quick-Play"), (TYPE_CONTINUOUS, "Continuous"),
+                            (TYPE_EQUIP, "Equip"), (TYPE_FIELD, "Field"), (TYPE_RITUAL, "Ritual")]:
+            if type_int & bit:
+                return f"Spell ({label})"
+        return "Spell (Normal)"
+    if type_int & TYPE_TRAP:
+        for bit, label in [(TYPE_CONTINUOUS, "Continuous"), (TYPE_COUNTER, "Counter")]:
+            if type_int & bit:
+                return f"Trap ({label})"
+        return "Trap (Normal)"
+    return "Unknown"
+
 def convert_card(card):
     """Convert one YGOPRODeck card JSON object -> our internal card_data dict."""
     type_str = card.get("type", "")
