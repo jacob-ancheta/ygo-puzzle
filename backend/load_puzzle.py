@@ -62,6 +62,17 @@ class CardDataExact(Structure):
     ]
 assert ctypes.sizeof(CardDataExact) == 80
 
+def unpack_setcode(value):
+    """Mirrors ygopro-core's write_setcode (card_data.h): split a packed
+    64-bit setcode into up to 16 individual 16-bit set codes."""
+    codes = []
+    while value:
+        low16 = value & 0xffff
+        if low16:
+            codes.append(low16)
+        value >>= 16
+    return codes
+
 def card_reader_impl(code, data_ptr):
     info = get_card(code)
     if not info:
@@ -69,6 +80,7 @@ def card_reader_impl(code, data_ptr):
         return 0
     d = data_ptr.contents
     d.code = code
+    d.alias = info["alias"]
     d.type = info["type"]
     d.level = info["level"]
     d.attribute = info["attribute"]
@@ -76,6 +88,11 @@ def card_reader_impl(code, data_ptr):
     d.attack = info["attack"]
     d.defense = info["defense"]
     d.link_marker = info["link_marker"]
+    d.lscale = info["lscale"]
+    d.rscale = info["rscale"]
+    codes = unpack_setcode(info["setcode"])
+    for i in range(16):
+        d.setcode[i] = codes[i] if i < len(codes) else 0
     return 1
 
 _script_cache = {}
@@ -114,8 +131,8 @@ pduel = lib.create_duel(12345)
 assert pduel != 0
 print("Engine ready, pduel handle:", pduel)
 
-lib.set_player_info(ctypes.c_ssize_t(pduel), 0, PUZZLE["lp"]["player"], 5, 1)
-lib.set_player_info(ctypes.c_ssize_t(pduel), 1, PUZZLE["lp"]["opponent"], 5, 1)
+lib.set_player_info(ctypes.c_ssize_t(pduel), 0, PUZZLE["lp"]["player"], 0, 1)
+lib.set_player_info(ctypes.c_ssize_t(pduel), 1, PUZZLE["lp"]["opponent"], 0, 1)
 
 # ---------- zone / position constants ----------
 LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE = 0x01, 0x02, 0x04

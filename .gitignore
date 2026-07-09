@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 ygopro-core/
 ygopro-scripts/
+cards.db

@@ -1,0 +1,1224 @@
+import os
+import ctypes
+from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Structure, CFUNCTYPE
+
+from card_lookup import get_card, get_card_by_name, search_cards
+from puzzle_definition import PUZZLE
+
+MINGW_BIN = r"C:\msys64\mingw64\bin"
+if os.path.exists(MINGW_BIN):
+    os.add_dll_directory(MINGW_BIN)
+
+DLL_PATH = r"C:\msys64\home\Jacob\ygopro-core\libygo.dll"
+SCRIPTS_DIR = r"C:\msys64\home\Jacob\ygopro-scripts"
+
+# ---------- resolve names first, same as load_puzzle.py ----------
+def resolve_all(puzzle):
+    names = [e["name"] for e in puzzle["opponent_field"]]
+    names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
+    resolved, failed = {}, []
+    for name in names:
+        card = get_card_by_name(name)
+        if card is None:
+            failed.append(name)
+        else:
+            resolved[name] = card
+    if failed:
+        for name in failed:
+            print(f"'{name}' not found. Close matches:")
+            for code, cname, *_ in search_cards(name, limit=5):
+                print(f"    {code:>10}  {cname}")
+        raise SystemExit(1)
+    return resolved
+
+resolved = resolve_all(PUZZLE)
+
+# ---------- engine setup ----------
+lib = ctypes.CDLL(DLL_PATH)
+
+class CardDataExact(Structure):
+    _fields_ = [
+        ("code", c_uint32), ("alias", c_uint32), ("setcode", ctypes.c_uint16 * 16),
+        ("type", c_uint32), ("level", c_uint32), ("attribute", c_uint32),
+        ("race", c_uint32), ("attack", c_int32), ("defense", c_int32),
+        ("lscale", c_uint32), ("rscale", c_uint32), ("link_marker", c_uint32),
+        ("rule_code", c_uint32),
+    ]
+
+def unpack_setcode(value):
+    """Mirrors ygopro-core's write_setcode (card_data.h): split a packed
+    64-bit setcode into up to 16 individual 16-bit set codes."""
+    codes = []
+    while value:
+        low16 = value & 0xffff
+        if low16:
+            codes.append(low16)
+        value >>= 16
+    return codes
+
+def card_reader_impl(code, data_ptr):
+    info = get_card(code)
+    if not info:
+        return 0
+    d = data_ptr.contents
+    d.code = code
+    d.alias = info["alias"]
+    d.type, d.level, d.attribute = info["type"], info["level"], info["attribute"]
+    d.race, d.attack, d.defense = info["race"], info["attack"], info["defense"]
+    d.link_marker = info["link_marker"]
+    d.lscale, d.rscale = info["lscale"], info["rscale"]
+    codes = unpack_setcode(info["setcode"])
+    for i in range(16):
+        d.setcode[i] = codes[i] if i < len(codes) else 0
+    return 1
+
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Virtual script (never touches disk) that backfills summon history for
+# opponent_field entries with a "summoned" key in puzzle_definition.py. Cards
+# placed via new_card/add_card bypass the real summon procedure, so effects
+# that check IsSummonType (e.g. Bystial Druiswurm's GY trigger) can never
+# find a legal target among them without this.
+SUMMON_TYPE_LUA = {"special": "SUMMON_TYPE_SPECIAL", "normal": "SUMMON_TYPE_NORMAL"}
+
+def build_puzzle_setup_script():
+    lines = []
+    for i, entry in enumerate(PUZZLE["opponent_field"]):
+        summon_type = entry.get("summoned")
+        if not summon_type:
+            continue
+        if summon_type not in SUMMON_TYPE_LUA:
+            raise ValueError(
+                f"puzzle_definition.py: unknown summoned={summon_type!r} for "
+                f"{entry['name']!r} (expected 'special' or 'normal')"
+            )
+        lines.append(
+            f"do local c = Duel.GetFieldCard(1, LOCATION_MZONE, {i}) "
+            f"if c then Debug.PreSummon(c, {SUMMON_TYPE_LUA[summon_type]}) end end"
+        )
+    return "\n".join(lines).encode()
+
+PUZZLE_SETUP_SCRIPT_NAME = "__puzzle_setup__.lua"
+PUZZLE_SETUP_SCRIPT = build_puzzle_setup_script()
+
+_script_cache = {}
+def script_reader_impl(script_name, len_ptr):
+    name = script_name.decode("utf-8") if script_name else ""
+    basename = os.path.basename(name)
+    if basename == PUZZLE_SETUP_SCRIPT_NAME:
+        data = PUZZLE_SETUP_SCRIPT
+    else:
+        local_path = os.path.join(BACKEND_DIR, basename)
+        path = local_path if os.path.exists(local_path) else os.path.join(SCRIPTS_DIR, basename)
+        if not os.path.exists(path):
+            return None
+        with open(path, "rb") as f:
+            data = f.read()
+    buf = ctypes.create_string_buffer(data, len(data))
+    _script_cache[name] = buf
+    len_ptr[0] = len(data)
+    return ctypes.cast(buf, ctypes.c_void_p).value
+
+def message_handler_impl(pduel, msg_type):
+    return 0
+
+CARD_READER = CFUNCTYPE(c_uint32, c_uint32, POINTER(CardDataExact))
+SCRIPT_READER = CFUNCTYPE(c_void_p, c_char_p, POINTER(ctypes.c_int))
+MESSAGE_HANDLER = CFUNCTYPE(c_uint32, ctypes.c_ssize_t, c_uint32)
+card_reader_cb = CARD_READER(card_reader_impl)
+script_reader_cb = SCRIPT_READER(script_reader_impl)
+message_handler_cb = MESSAGE_HANDLER(message_handler_impl)
+lib.set_card_reader(card_reader_cb)
+lib.set_script_reader(script_reader_cb)
+lib.set_message_handler(message_handler_cb)
+
+lib.create_duel.restype = ctypes.c_ssize_t
+lib.create_duel.argtypes = [ctypes.c_uint32]
+pduel = lib.create_duel(12345)
+
+lib.set_player_info(ctypes.c_ssize_t(pduel), 0, PUZZLE["lp"]["player"], 0, 1)
+lib.set_player_info(ctypes.c_ssize_t(pduel), 1, PUZZLE["lp"]["opponent"], 0, 1)
+
+LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE, LOCATION_EXTRA = 0x01, 0x02, 0x04, 0x08, 0x40
+POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE = 0x1, 0x4
+
+def place(code, owner, location, zone, position):
+    lib.new_card(ctypes.c_ssize_t(pduel), ctypes.c_uint32(code), ctypes.c_uint8(owner),
+                 ctypes.c_uint8(owner), ctypes.c_uint8(location), ctypes.c_uint8(zone),
+                 ctypes.c_uint8(position))
+
+for i, entry in enumerate(PUZZLE["opponent_field"]):
+    card = resolved[entry["name"]]
+    pos = POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
+    place(card["code"], 1, LOCATION_MZONE, i, pos)
+for i, name in enumerate(PUZZLE["player_hand"]):
+    place(resolved[name]["code"], 0, LOCATION_HAND, i, POS_FACEUP_ATTACK)
+for i, name in enumerate(PUZZLE["player_deck"]):
+    place(resolved[name]["code"], 0, LOCATION_DECK, i, POS_FACEUP_ATTACK)
+for i, name in enumerate(PUZZLE["player_extra"]):
+    place(resolved[name]["code"], 0, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)
+
+DUEL_ATTACK_FIRST_TURN = 0x02  # puzzles are constructed positions, not turn 1 of a real match --
+                                # without this, the engine correctly (but unhelpfully) blocks
+                                # Battle Phase entirely on the very first turn.
+lib.start_duel(ctypes.c_ssize_t(pduel), ctypes.c_uint32(DUEL_ATTACK_FIRST_TURN))
+
+if PUZZLE_SETUP_SCRIPT:
+    lib.preload_script.restype = ctypes.c_int32
+    lib.preload_script(ctypes.c_ssize_t(pduel), PUZZLE_SETUP_SCRIPT_NAME.encode())
+
+print(f"\nPuzzle loaded. {PUZZLE['win_condition']}\n")
+
+# ---------- message protocol ----------
+MSG_RETRY = 1
+MSG_HINT = 2
+MSG_WIN = 5
+MSG_SELECT_BATTLECMD = 10
+MSG_SELECT_IDLECMD = 11
+MSG_SELECT_EFFECTYN = 12
+MSG_SELECT_YESNO = 13
+MSG_SELECT_OPTION = 14
+MSG_SELECT_CARD = 15
+MSG_SELECT_CHAIN = 16
+MSG_SELECT_PLACE = 18
+MSG_SELECT_POSITION = 19
+MSG_SELECT_TRIBUTE = 20
+MSG_SELECT_COUNTER = 22
+MSG_SELECT_SUM = 23
+MSG_SELECT_DISFIELD = 24
+MSG_SORT_CARD = 25
+MSG_SELECT_UNSELECT_CARD = 26
+MSG_CONFIRM_DECKTOP = 30
+MSG_CONFIRM_CARDS = 31
+MSG_SHUFFLE_DECK = 32
+MSG_SHUFFLE_HAND = 33
+MSG_SWAP_GRAVE_DECK = 35
+MSG_SHUFFLE_SET_CARD = 36
+MSG_REVERSE_DECK = 37
+MSG_DECK_TOP = 38
+MSG_SHUFFLE_EXTRA = 39
+MSG_NEW_TURN = 40
+MSG_NEW_PHASE = 41
+MSG_CONFIRM_EXTRATOP = 42
+MSG_MOVE = 50
+MSG_POS_CHANGE = 53
+MSG_SET = 54
+MSG_SWAP = 55
+MSG_FIELD_DISABLED = 56
+MSG_SUMMONING = 60
+MSG_SUMMONED = 61
+MSG_SPSUMMONING = 62
+MSG_SPSUMMONED = 63
+MSG_FLIPSUMMONING = 64
+MSG_FLIPSUMMONED = 65
+MSG_CHAINING = 70
+MSG_CHAINED = 71
+MSG_CHAIN_SOLVING = 72
+MSG_CHAIN_SOLVED = 73
+MSG_CHAIN_END = 74
+MSG_CHAIN_NEGATED = 75
+MSG_CHAIN_DISABLED = 76
+MSG_RANDOM_SELECTED = 81
+MSG_BECOME_TARGET = 83
+MSG_DRAW = 90
+MSG_DAMAGE = 91
+MSG_RECOVER = 92
+MSG_EQUIP = 93
+MSG_LPUPDATE = 94
+MSG_UNEQUIP = 95
+MSG_CARD_TARGET = 96
+MSG_CANCEL_TARGET = 97
+MSG_PAY_LPCOST = 100
+MSG_ADD_COUNTER = 101
+MSG_REMOVE_COUNTER = 102
+MSG_ATTACK = 110
+MSG_BATTLE = 111
+MSG_ATTACK_DISABLED = 112
+MSG_DAMAGE_STEP_START = 113
+MSG_DAMAGE_STEP_END = 114
+MSG_MISSED_EFFECT = 120
+MSG_TOSS_COIN = 130
+MSG_TOSS_DICE = 131
+MSG_ROCK_PAPER_SCISSORS = 132
+MSG_HAND_RES = 133
+MSG_ANNOUNCE_RACE = 140
+MSG_ANNOUNCE_ATTRIB = 141
+MSG_ANNOUNCE_CARD = 142
+MSG_ANNOUNCE_NUMBER = 143
+MSG_CARD_HINT = 160
+MSG_TAG_SWAP = 161
+MSG_RELOAD_FIELD = 162
+MSG_AI_NAME = 163
+MSG_SHOW_HINT = 164
+MSG_PLAYER_HINT = 165
+MSG_MATCH_KILL = 170
+
+LOCATION_NAMES = {
+    LOCATION_DECK: "Deck", LOCATION_HAND: "Hand", LOCATION_MZONE: "Monster Zone",
+    LOCATION_SZONE: "Spell/Trap Zone", 0x10: "Graveyard", 0x20: "Banished",
+    LOCATION_EXTRA: "Extra Deck", 0x80: "Overlay",
+}
+
+def describe_location(info):
+    controller = info & 0xff
+    location = (info >> 8) & 0xff
+    sequence = (info >> 16) & 0xff
+    who = "your" if controller == 0 else "opponent's"
+    loc_name = LOCATION_NAMES.get(location, hex(location))
+    if location in (LOCATION_MZONE, LOCATION_SZONE):
+        return f"{who} {loc_name} {sequence}"
+    return f"{who} {loc_name}"
+
+PHASE_NAMES = {
+    0x01: "Draw Phase", 0x02: "Standby Phase", 0x04: "Main Phase 1",
+    0x08: "Battle Start", 0x10: "Battle Step", 0x20: "Damage Step",
+    0x40: "Damage Calculation", 0x80: "Battle Step End", 0x100: "Main Phase 2",
+    0x200: "End Phase",
+}
+
+IDLE_ACTION_NAMES = ["Summon", "Special Summon", "Change Position", "Set Monster",
+                     "Set Spell/Trap", "Activate", "Go to Battle Phase", "Go to End Phase", "Shuffle Hand"]
+
+def card_name(code):
+    info = get_card(code & 0x7fffffff)
+    return info["name"] if info else f"unknown({code})"
+
+def decode_place_flag(flag, playerid):
+    # bit layout per ygopro-core playerop.cpp field::select_place (bit set = zone blocked):
+    #   0-6: own mzone seq 0-6      8-12: own szone seq 0-4      14-15: own pzone (seq 6/7)
+    #   16-22: opp mzone seq 0-6    24-28: opp szone seq 0-4     30-31: opp pzone (seq 6/7)
+    opp = 1 - playerid
+    options = []
+    for s in range(7):
+        if not (flag & (1 << s)):
+            options.append((playerid, LOCATION_MZONE, s, f"Your Monster Zone {s}"))
+    for s in range(5):
+        if not (flag & (1 << (8 + s))):
+            options.append((playerid, LOCATION_SZONE, s, f"Your Spell/Trap Zone {s}"))
+    if not (flag & (1 << 14)):
+        options.append((playerid, LOCATION_SZONE, 6, "Your Pendulum Zone (left)"))
+    if not (flag & (1 << 15)):
+        options.append((playerid, LOCATION_SZONE, 7, "Your Pendulum Zone (right)"))
+    for s in range(7):
+        if not (flag & (1 << (16 + s))):
+            options.append((opp, LOCATION_MZONE, s, f"Opponent Monster Zone {s}"))
+    for s in range(5):
+        if not (flag & (1 << (24 + s))):
+            options.append((opp, LOCATION_SZONE, s, f"Opponent Spell/Trap Zone {s}"))
+    if not (flag & (1 << 30)):
+        options.append((opp, LOCATION_SZONE, 6, "Opponent Pendulum Zone (left)"))
+    if not (flag & (1 << 31)):
+        options.append((opp, LOCATION_SZONE, 7, "Opponent Pendulum Zone (right)"))
+    return options
+
+def prompt_choice(n, label="choice"):
+    while True:
+        raw = input(f"  enter {label} (0-{n-1}): ").strip()
+        if raw.isdigit() and 0 <= int(raw) < n:
+            return int(raw)
+        print("  invalid input, try again")
+
+
+class DuelEnded(Exception):
+    """Raised when the engine's processor queue is genuinely empty (no more
+    messages will ever come without some external stimulus we haven't given)."""
+
+# ---------- message stream: pulls from the engine, transparently spanning
+# multiple process() calls so a single message is never split ----------
+class MessageStream:
+    def __init__(self):
+        self.buf = b""
+        self.pos = 0
+
+    def _refill(self):
+        # A single process() call can legitimately come back with nothing new
+        # (the engine's internal step queue can go quiet for a call or two,
+        # e.g. right after a PROCESSOR_WAIT-based message like MSG_CONFIRM_CARDS,
+        # while it resumes the yielded script) without the duel actually being
+        # over, so retry a bounded number of times before giving up for real.
+        for _ in range(1000):
+            result = lib.process(ctypes.c_ssize_t(pduel))
+            msg_len = result & 0xffff
+            if msg_len:
+                raw = (ctypes.c_ubyte * msg_len)()
+                lib.get_message(ctypes.c_ssize_t(pduel), raw)
+                self.buf = bytes(raw)
+                self.pos = 0
+                return True
+        return False
+
+    def _ensure(self):
+        while self.pos >= len(self.buf):
+            if not self._refill():
+                raise DuelEnded()
+
+    def u8(self):
+        self._ensure()
+        v = self.buf[self.pos]; self.pos += 1
+        return v
+
+    def u16(self):
+        self._ensure()
+        v = int.from_bytes(self.buf[self.pos:self.pos + 2], "little"); self.pos += 2
+        return v
+
+    def u32(self):
+        self._ensure()
+        v = int.from_bytes(self.buf[self.pos:self.pos + 4], "little"); self.pos += 4
+        return v
+
+    def raw(self, n):
+        self._ensure()
+        v = self.buf[self.pos:self.pos + n]; self.pos += n
+        return v
+
+stream = MessageStream()
+
+def send_i(value):
+    lib.set_responsei(ctypes.c_ssize_t(pduel), ctypes.c_int32(value))
+
+def send_b(byte_values):
+    # set_responseb always memcpy's a fixed 256 bytes from whatever we pass,
+    # so the buffer must always be fully allocated, not sized to the payload.
+    buf_out = (ctypes.c_ubyte * 256)()
+    for i, v in enumerate(byte_values):
+        buf_out[i] = v & 0xff
+    lib.set_responseb(ctypes.c_ssize_t(pduel), buf_out)
+
+def interact(ask):
+    """Run `ask()` (which reads a decision and submits a response), and if the
+    engine rejects it with MSG_RETRY, print a note and just ask again -- the
+    same prompt, not a crash. Returns the next non-retry message type."""
+    while True:
+        ask()
+        msg = stream.u8()
+        if msg == MSG_RETRY:
+            print("  (that wasn't a legal choice for this decision -- try again)")
+            continue
+        return msg
+
+def read_zone_card_list(n, extra_u32=False):
+    """Reads n * (code:u32, controller:u8, location:u8, sequence:u8[, extra:u32])."""
+    items = []
+    for _ in range(n):
+        code = stream.u32() & 0x7fffffff
+        ctrl = stream.u8(); loc = stream.u8(); seq = stream.u8()
+        extra = stream.u32() if extra_u32 else None
+        items.append((code, ctrl, loc, seq, extra))
+    return items
+
+def prompt_card_selection(items, min_sel, max_sel):
+    """Generic 'pick between min_sel and max_sel cards from a list' UI,
+    shared by MSG_SELECT_CARD / MSG_SELECT_TRIBUTE / MSG_SELECT_SUM etc.
+    Returns the list of chosen indices."""
+    for i, code in enumerate(items):
+        print(f"  {i}: {card_name(code)}")
+    chosen = []
+    while len(chosen) < max_sel:
+        if len(chosen) >= min_sel:
+            raw = input("  enter index to add (or blank to finish): ").strip()
+            if raw == "":
+                break
+            if not raw.isdigit() or not (0 <= int(raw) < len(items)) or int(raw) in chosen:
+                print("  invalid"); continue
+            chosen.append(int(raw))
+        else:
+            idx = prompt_choice(len(items), f"card {len(chosen) + 1}/{min_sel}")
+            if idx in chosen:
+                print("  already chosen"); continue
+            chosen.append(idx)
+    return chosen
+
+
+PHASE_END = 0x200
+
+def run():
+    pending = None
+    current_turn_player = 0
+    while True:
+        msg = pending if pending is not None else stream.u8()
+        pending = None
+
+        if msg == MSG_NEW_TURN:
+            player = stream.u8()
+            current_turn_player = player
+            print(f"\n=== Turn: player {player} {'(you)' if player == 0 else '(opponent)'} ===")
+
+        elif msg == MSG_NEW_PHASE:
+            phase = stream.u16()
+            print(f"--- {PHASE_NAMES.get(phase, hex(phase))} ---")
+            if phase == PHASE_END and current_turn_player == 0:
+                print("\n*** LOSS: turn ended without winning -- puzzle not solved ***")
+                return
+
+        elif msg == MSG_HINT:
+            stream.u8()   # hint type (event/message/selectmsg/etc.)
+            stream.u8()   # player
+            stream.u32()  # value
+            # purely a UI hint, nothing to display or act on
+
+        elif msg == MSG_DRAW:
+            player = stream.u8()
+            count = stream.u8()
+            codes = [stream.u32() & 0x7fffffff for _ in range(count)]
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who} drew {count} card(s): {', '.join(card_name(c) for c in codes)}")
+
+        elif msg == MSG_MOVE:
+            code = stream.u32() & 0x7fffffff
+            prev = stream.u32()
+            cur = stream.u32()
+            stream.u32()  # reason, not needed for display
+            print(f"{card_name(code)} moved: {describe_location(prev)} -> {describe_location(cur)}")
+
+        elif msg == MSG_SUMMONING:
+            code = stream.u32() & 0x7fffffff
+            stream.u32()  # location info, redundant with the MSG_MOVE just printed
+            print(f"Summoning {card_name(code)}...")
+
+        elif msg == MSG_SUMMONED:
+            print("...summon resolved.")
+
+        elif msg == MSG_SPSUMMONING:
+            code = stream.u32() & 0x7fffffff
+            stream.u32()
+            print(f"Special summoning {card_name(code)}...")
+
+        elif msg == MSG_SPSUMMONED:
+            print("...special summon resolved.")
+
+        elif msg == MSG_FLIPSUMMONING:
+            code = stream.u32() & 0x7fffffff
+            stream.u32()
+            print(f"Flip summoning {card_name(code)}...")
+
+        elif msg == MSG_FLIPSUMMONED:
+            print("...flip summon resolved.")
+
+        elif msg == MSG_CHAINING:
+            code = stream.u32() & 0x7fffffff
+            stream.u32()  # location info
+            stream.u8(); stream.u8(); stream.u8()  # controller, location, sequence
+            desc = stream.u32()
+            chain_size = stream.u8()
+            print(f"Activating {card_name(code)} (chain link {chain_size}, desc {desc})")
+
+        elif msg == MSG_CHAINED:
+            stream.u8()  # chain_count, UI-only
+
+        elif msg == MSG_CHAIN_SOLVING:
+            n = stream.u8()
+            print(f"Resolving chain link {n}...")
+
+        elif msg == MSG_CHAIN_SOLVED:
+            stream.u8()
+
+        elif msg == MSG_CHAIN_END:
+            print("Chain fully resolved.")
+
+        elif msg == MSG_CHAIN_NEGATED:
+            n = stream.u8()
+            print(f"Chain link {n} was negated.")
+
+        elif msg == MSG_CHAIN_DISABLED:
+            n = stream.u8()
+            print(f"Chain link {n} was disabled.")
+
+        elif msg == MSG_SHUFFLE_DECK:
+            player = stream.u8()
+            print(f"(deck reshuffled for player {player})")
+
+        elif msg == MSG_SHUFFLE_HAND:
+            player = stream.u8()
+            count = stream.u8()
+            for _ in range(count):
+                stream.u32()  # new hand order -- informational only, we don't need to track it
+            print(f"(hand reshuffled for player {player})")
+
+        elif msg == MSG_SHUFFLE_EXTRA:
+            player = stream.u8()
+            count = stream.u8()
+            for _ in range(count):
+                stream.u32()
+            print(f"(extra deck reshuffled for player {player})")
+
+        elif msg == MSG_SWAP_GRAVE_DECK:
+            player = stream.u8()
+            print(f"(GY shuffled back into deck for player {player})")
+
+        elif msg == MSG_REVERSE_DECK:
+            pass  # no payload; deck-facedown-state toggle, purely internal bookkeeping
+
+        elif msg == MSG_DECK_TOP:
+            player = stream.u8()
+            stream.u8()  # sequence/count, not needed for display
+            stream.u32()  # code (may be revealed or hidden via the high bit)
+
+        elif msg == MSG_SHUFFLE_SET_CARD:
+            loc = stream.u8()
+            count = stream.u8()
+            for _ in range(count):
+                stream.u32()
+            print("(set cards on the field were shuffled)")
+
+        elif msg == MSG_CARD_HINT:
+            stream.u32()  # info location
+            stream.u8()   # hint type
+            stream.u32()  # value
+            # purely a UI hint, nothing to display or act on
+
+        elif msg == MSG_POS_CHANGE:
+            code = stream.u32() & 0x7fffffff
+            stream.u8(); stream.u8(); stream.u8()  # controller, location, sequence
+            prev_pos = stream.u8()
+            cur_pos = stream.u8()
+            print(f"{card_name(code)} changed position.")
+
+        elif msg == MSG_SET:
+            code = stream.u32() & 0x7fffffff
+            stream.u32()  # location info
+            print(f"{card_name(code)} was set.")
+
+        elif msg == MSG_SWAP:
+            code1 = stream.u32() & 0x7fffffff
+            stream.u32()
+            code2 = stream.u32() & 0x7fffffff
+            stream.u32()
+            print(f"{card_name(code1)} and {card_name(code2)} swapped places.")
+
+        elif msg == MSG_FIELD_DISABLED:
+            stream.u32()  # disabled-zone bitmask, UI-only
+
+        elif msg == MSG_RANDOM_SELECTED:
+            player = stream.u8()
+            count = stream.u8()
+            for _ in range(count):
+                stream.u32()
+            print(f"(engine randomly selected {count} card(s) for player {player})")
+
+        elif msg == MSG_BECOME_TARGET:
+            count = stream.u8()
+            for _ in range(count):
+                stream.u32()
+            # purely informational -- "this card became a target of an effect"
+
+        elif msg == MSG_RECOVER:
+            player = stream.u8()
+            amount = stream.u32()
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who} recovered {amount} LP")
+
+        elif msg == MSG_EQUIP:
+            stream.u32(); stream.u32()  # equip-card info, target info
+
+        elif msg == MSG_LPUPDATE:
+            player = stream.u8()
+            lp = stream.u32()
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who}'s LP set to {lp}")
+
+        elif msg == MSG_UNEQUIP:
+            stream.u32(); stream.u32()
+
+        elif msg == MSG_CARD_TARGET:
+            stream.u32(); stream.u32()
+
+        elif msg == MSG_CANCEL_TARGET:
+            stream.u32(); stream.u32()
+
+        elif msg == MSG_PAY_LPCOST:
+            player = stream.u8()
+            cost = stream.u32()
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who} paid {cost} LP")
+
+        elif msg == MSG_ADD_COUNTER:
+            countertype = stream.u16()
+            stream.u8(); stream.u8(); stream.u8()  # controller, location, sequence
+            count = stream.u16()
+            print(f"{count} counter(s) (type {countertype}) added")
+
+        elif msg == MSG_REMOVE_COUNTER:
+            countertype = stream.u16()
+            stream.u8(); stream.u8(); stream.u8()
+            count = stream.u16()
+            print(f"{count} counter(s) (type {countertype}) removed")
+
+        elif msg == MSG_ATTACK:
+            attacker = stream.u32()
+            target = stream.u32()
+            if target:
+                print(f"{describe_location(attacker)}'s monster attacks {describe_location(target)}'s monster")
+            else:
+                print(f"{describe_location(attacker)}'s monster attacks directly")
+
+        elif msg == MSG_BATTLE:
+            stream.u32()  # attacker info, already known from MSG_ATTACK
+            a_atk = stream.u32()
+            a_def = stream.u32()
+            a_destroyed = stream.u8()
+            d_info = stream.u32()
+            d_atk = stream.u32()
+            d_def = stream.u32()
+            d_destroyed = stream.u8()
+            if d_info:
+                print(f"Battle: {a_atk} ATK vs {d_atk} ATK / {d_def} DEF"
+                      f"{' -- attacker destroyed' if a_destroyed else ''}"
+                      f"{' -- defender destroyed' if d_destroyed else ''}")
+
+        elif msg == MSG_ATTACK_DISABLED:
+            print("(that attack was disabled)")
+
+        elif msg == MSG_DAMAGE_STEP_START:
+            pass
+
+        elif msg == MSG_DAMAGE_STEP_END:
+            pass
+
+        elif msg == MSG_MISSED_EFFECT:
+            stream.u32()  # location info
+            code = stream.u32() & 0x7fffffff
+            print(f"{card_name(code)}'s effect missed timing")
+
+        elif msg == MSG_MATCH_KILL:
+            stream.u32()
+
+        elif msg == MSG_DAMAGE:
+            player = stream.u8()
+            amount = stream.u32()
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who} took {amount} damage")
+
+        elif msg == MSG_TOSS_COIN:
+            player = stream.u8()
+            count = stream.u8()
+            results = [stream.u8() for _ in range(count)]
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who} tossed {count} coin(s): {['Heads' if r else 'Tails' for r in results]}")
+
+        elif msg == MSG_TOSS_DICE:
+            player = stream.u8()
+            count = stream.u8()
+            results = [stream.u8() for _ in range(count)]
+            who = "You" if player == 0 else "Opponent"
+            print(f"{who} rolled {count} dice: {results}")
+
+        elif msg == MSG_HAND_RES:
+            packed = stream.u8()
+            hand0, hand1 = packed & 0x3, (packed >> 2) & 0x3
+            names = {1: "Rock", 2: "Paper", 3: "Scissors"}
+            print(f"Rock-Paper-Scissors: you={names.get(hand0, '?')}, opponent={names.get(hand1, '?')}")
+
+        elif msg == MSG_AI_NAME:
+            length = stream.u16()
+            stream.raw(length)
+            stream.u8()
+
+        elif msg == MSG_SHOW_HINT:
+            length = stream.u16()
+            text = stream.raw(length).decode("utf-8", "ignore")
+            stream.u8()
+            print(f"(hint) {text}")
+
+        elif msg == MSG_PLAYER_HINT:
+            stream.u8(); stream.u8(); stream.u32()  # player, hint type, description -- UI-only
+
+        elif msg == MSG_RELOAD_FIELD:
+            # Full field resync -- only expected on tag-duel/spectator-style reconnects,
+            # not in a normal solo puzzle session. If this ever fires for real, it needs
+            # its exact zone-count layout (7 mzone/8 szone slots) decoded properly.
+            print("\n[!] MSG_RELOAD_FIELD fired -- this is a rare full-field resync message")
+            print("    that isn't expected in a solo puzzle session. Stopping here so")
+            print("    nothing gets misparsed; tell Claude if you hit this.")
+            return
+
+        elif msg == MSG_TAG_SWAP:
+            player = stream.u8()
+            main_count = stream.u8()
+            extra_count = stream.u8()
+            stream.u8()  # extra_p_count
+            hand_count = stream.u8()
+            stream.u32()  # deck top code (only meaningful if the deck is reversed)
+            for _ in range(hand_count):
+                stream.u32()
+            for _ in range(extra_count):
+                stream.u32()
+            print(f"(tag swap for player {player})")
+
+        elif msg == MSG_WIN:
+            winner = stream.u8()
+            reason = stream.u8()
+            who = "You" if winner == 0 else "Opponent"
+            print(f"\n*** {who} WIN! (reason code {reason}) ***")
+            return
+
+        elif msg == MSG_CONFIRM_DECKTOP or msg == MSG_CONFIRM_EXTRATOP:
+            player = stream.u8()
+            count = stream.u8()
+            items = read_zone_card_list(count)
+            label = "deck top" if msg == MSG_CONFIRM_DECKTOP else "extra deck top"
+            print(f"[player {player}] Confirmed {label}: {', '.join(card_name(c) for c, *_ in items)}")
+
+        elif msg == MSG_CONFIRM_CARDS:
+            player = stream.u8()
+            stream.u8()  # skip_panel
+            count = stream.u8()
+            items = read_zone_card_list(count)
+            print(f"[player {player}] Confirmed card(s): {', '.join(card_name(c) for c, *_ in items)}")
+
+        elif msg == MSG_SELECT_YESNO:
+            player = stream.u8()
+            desc = stream.u32()
+            if player == 1:
+                # opponent decision -- always decline for now (see project memory
+                # on scripted opponent policy; a real per-puzzle policy can replace this)
+                print(f"\n[player 1] Yes/No prompt (description code {desc}) -- auto-passing (No)")
+                send_i(0)
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None  # fall through to manual prompt below if "No" wasn't legal
+            if pending is None and player == 1:
+                def ask():
+                    print(f"\n[player 1] Yes/No prompt (description code {desc}) -- \"No\" wasn't legal, please choose:")
+                    choice = prompt_choice(2, "0=No, 1=Yes")
+                    send_i(choice)
+                pending = interact(ask)
+            elif player != 1:
+                def ask():
+                    print(f"\n[player {player}] Yes/No prompt (description code {desc})")
+                    choice = prompt_choice(2, "0=No, 1=Yes")
+                    send_i(choice)
+                pending = interact(ask)
+
+        elif msg == MSG_SELECT_EFFECTYN:
+            player = stream.u8()
+            code = stream.u32()
+            stream.u32()  # location info, not needed for display
+            desc = stream.u32()
+            if player == 1:
+                print(f"\n[player 1] Activate effect of {card_name(code)}? (desc {desc}) -- auto-passing (No)")
+                send_i(0)
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    print(f"\n[player 1] Activate effect of {card_name(code)}? (desc {desc}) -- \"No\" wasn't legal, please choose:")
+                    choice = prompt_choice(2, "0=No, 1=Yes")
+                    send_i(choice)
+                pending = interact(ask)
+            elif player != 1:
+                def ask():
+                    print(f"\n[player {player}] Activate effect of {card_name(code)}? (desc {desc})")
+                    choice = prompt_choice(2, "0=No, 1=Yes")
+                    send_i(choice)
+                pending = interact(ask)
+
+        elif msg == MSG_SELECT_OPTION:
+            player = stream.u8()
+            n = stream.u8()
+            options = [stream.u32() for _ in range(n)]
+            def ask():
+                print(f"\n[player {player}] Select an option:")
+                for i, opt in enumerate(options):
+                    print(f"  {i}: option (desc {opt})")
+                choice = prompt_choice(len(options), "option")
+                send_i(choice)
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_POSITION:
+            player = stream.u8()
+            code = stream.u32() & 0x7fffffff
+            positions = stream.u8()
+            pos_names = {0x1: "Face-up Attack", 0x2: "Face-down Attack",
+                         0x4: "Face-up Defense", 0x8: "Face-down Defense"}
+            avail = [p for p in (0x1, 0x2, 0x4, 0x8) if positions & p]
+            def ask():
+                print(f"\n[player {player}] Select a position for {card_name(code)}:")
+                for i, p in enumerate(avail):
+                    print(f"  {i}: {pos_names[p]}")
+                idx = prompt_choice(len(avail), "position")
+                send_i(avail[idx])
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_IDLECMD:
+            player = stream.u8()
+            categories = []
+            for cat_idx in range(5):  # summon, spsummon, repos, mset, sset
+                n = stream.u8()
+                items = []
+                for _ in range(n):
+                    code = stream.u32(); stream.u8(); stream.u8(); stream.u8()  # controller, location, sequence
+                    items.append(code)
+                categories.append(items)
+            n_activate = stream.u8()
+            activate_items = []
+            for _ in range(n_activate):
+                code = stream.u32() & 0x7fffffff
+                stream.u8(); stream.u8(); stream.u8(); stream.u32()  # controller, location, sequence, description
+                activate_items.append(code)
+            categories.append(activate_items)
+            to_bp = stream.u8()
+            to_ep = stream.u8()
+            can_shuffle = stream.u8()
+
+            def ask():
+                print(f"\n[player {player}] Main phase -- what would you like to do?")
+                options = []
+                for cat_i, label in enumerate(IDLE_ACTION_NAMES[:6]):
+                    for item_i, code in enumerate(categories[cat_i] if cat_i < 6 else []):
+                        options.append((cat_i, item_i, f"{label}: {card_name(code)}"))
+                if to_bp:
+                    options.append((6, 0, "Go to Battle Phase"))
+                if to_ep:
+                    options.append((7, 0, "Go to End Phase"))
+                if can_shuffle:
+                    options.append((8, 0, "Shuffle hand into deck"))
+                for i, (_, _, label) in enumerate(options):
+                    print(f"  {i}: {label}")
+                choice = prompt_choice(len(options), "option")
+                t, s, _ = options[choice]
+                value = (t & 0xffff) | (s << 16)
+                send_i(value)
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_BATTLECMD:
+            player = stream.u8()
+            n_chain = stream.u8()
+            chains = []
+            for _ in range(n_chain):
+                code = stream.u32() & 0x7fffffff
+                stream.u8(); stream.u8(); stream.u8()
+                desc = stream.u32()
+                chains.append((code, desc))
+            n_attack = stream.u8()
+            attackers = []
+            for _ in range(n_attack):
+                code = stream.u32() & 0x7fffffff
+                stream.u8(); stream.u8(); stream.u8()
+                direct_ok = stream.u8()
+                attackers.append((code, direct_ok))
+            to_m2 = stream.u8()
+            to_ep = stream.u8()
+
+            def ask():
+                print(f"\n[player {player}] Battle phase -- what would you like to do?")
+                options = []
+                for i, (code, desc) in enumerate(chains):
+                    options.append((0, i, f"Activate: {card_name(code)} (desc {desc})"))
+                for i, (code, direct_ok) in enumerate(attackers):
+                    label = f"Attack with {card_name(code)}"
+                    if direct_ok:
+                        label += " (can attack directly)"
+                    options.append((1, i, label))
+                if to_m2:
+                    options.append((2, 0, "Go to Main Phase 2"))
+                if to_ep:
+                    options.append((3, 0, "Go to End Phase"))
+                for i, (_, _, label) in enumerate(options):
+                    print(f"  {i}: {label}")
+                choice = prompt_choice(len(options), "option")
+                t, s, _ = options[choice]
+                value = (t & 0xffff) | (s << 16)
+                send_i(value)
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_CARD or msg == MSG_SELECT_TRIBUTE:
+            player = stream.u8()
+            cancelable = stream.u8()
+            min_sel = stream.u8()
+            max_sel = stream.u8()
+            n = stream.u8()
+            has_release_param = (msg == MSG_SELECT_TRIBUTE)
+            items = []
+            for _ in range(n):
+                code = stream.u32()
+                if has_release_param:
+                    stream.u8(); stream.u8(); stream.u8()  # controller, location, sequence
+                    stream.u8()  # release_param (tribute weight) -- shown implicitly via prompt
+                else:
+                    stream.u32()  # packed location info, not decoded (not needed to choose by index)
+                items.append(code)
+
+            def ask():
+                label = "tribute" if has_release_param else "card"
+                print(f"\n[player {player}] Select {min_sel}-{max_sel} {label}(s):")
+                chosen = prompt_card_selection(items, min_sel, max_sel)
+                send_b([len(chosen)] + chosen)
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_CHAIN:
+            player = stream.u8()
+            count = stream.u8()
+            stream.u8()   # spe_count, UI-only bookkeeping, not needed to choose
+            stream.u32()  # hint_timing (self), UI-only
+            stream.u32()  # hint_timing (opponent), UI-only
+            chains = []
+            for _ in range(count):
+                stream.u8()  # description type, UI-only
+                forced = stream.u8()
+                code = stream.u32() & 0x7fffffff
+                stream.u32()  # location info, not needed to choose
+                desc = stream.u32()
+                chains.append((forced, code, desc))
+            any_forced = any(forced for forced, _, _ in chains)
+
+            if not chains:
+                # nothing available to activate -- don't bother asking, just pass
+                send_i(-1)
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    # shouldn't happen with no options, but stay safe
+                    pending = None
+            elif player == 1:
+                # opponent decision -- for now always pass (see project memory on
+                # scripted opponent policy); if a chain is forced it must pick one,
+                # so just take the first forced option automatically.
+                if any_forced:
+                    choice = next(i for i, (forced, _, _) in enumerate(chains) if forced)
+                    print(f"\n[player 1] Chain window -- forced to activate {card_name(chains[choice][1])}")
+                else:
+                    choice = -1
+                    print(f"\n[player 1] Chain window -- auto-passing ({len(chains)} option(s) available)")
+                send_i(choice)
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and chains and player == 1:
+                def ask():
+                    print(f"\n[player 1] Chain window -- auto-pass wasn't legal, please choose:")
+                    for i, (forced, code, desc) in enumerate(chains):
+                        tag = " (forced)" if forced else ""
+                        print(f"  {i}: Activate {card_name(code)} (effect desc {desc}){tag}")
+                    if not any_forced:
+                        print("  -1: Don't activate anything (pass)")
+                    while True:
+                        raw = input("  enter choice: ").strip()
+                        if raw == "-1" and not any_forced:
+                            choice = -1
+                            break
+                        if raw.lstrip("-").isdigit() and 0 <= int(raw) < len(chains):
+                            choice = int(raw)
+                            break
+                        print("  invalid input, try again")
+                    send_i(choice)
+                pending = interact(ask)
+            elif chains and player != 1:
+                def ask():
+                    print(f"\n[player {player}] Chain window -- activate an effect?")
+                    for i, (forced, code, desc) in enumerate(chains):
+                        tag = " (forced)" if forced else ""
+                        print(f"  {i}: Activate {card_name(code)} (effect desc {desc}){tag}")
+                    if not any_forced:
+                        print("  -1: Don't activate anything (pass)")
+                    while True:
+                        raw = input("  enter choice: ").strip()
+                        if raw == "-1" and not any_forced:
+                            choice = -1
+                            break
+                        if raw.lstrip("-").isdigit() and 0 <= int(raw) < len(chains):
+                            choice = int(raw)
+                            break
+                        print("  invalid input, try again")
+                    send_i(choice)
+                pending = interact(ask)
+
+        elif msg == MSG_SELECT_PLACE or msg == MSG_SELECT_DISFIELD:
+            player = stream.u8()
+            count = stream.u8()
+            flag = stream.u32()
+            count = count if count else 1
+            options = decode_place_flag(flag, player)
+
+            def ask():
+                print(f"\n[player {player}] Select {count} place(s) to put the card:")
+                for i, (_, _, _, label) in enumerate(options):
+                    print(f"  {i}: {label}")
+                chosen = []
+                for pick_i in range(count):
+                    idx = prompt_choice(len(options), f"place {pick_i + 1}/{count}")
+                    chosen.append(options[idx])
+                out = []
+                for p, loc, seq, _label in chosen:
+                    out += [p, loc, seq]
+                send_b(out)
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_UNSELECT_CARD:
+            player = stream.u8()
+            finishable = stream.u8()
+            cancelable = stream.u8()
+            min_sel = stream.u8()
+            max_sel = stream.u8()
+            n_sel = stream.u8()
+            select_items = []
+            for _ in range(n_sel):
+                code = stream.u32() & 0x7fffffff
+                stream.u32()  # packed location info
+                select_items.append(code)
+            n_unsel = stream.u8()
+            unselect_items = []
+            for _ in range(n_unsel):
+                code = stream.u32() & 0x7fffffff
+                stream.u32()
+                unselect_items.append(code)
+            combined = select_items + unselect_items
+
+            def ask():
+                print(f"\n[player {player}] Select/unselect a card ({min_sel}-{max_sel} total):")
+                for i, code in enumerate(combined):
+                    tag = " (already selected)" if i >= len(select_items) else ""
+                    print(f"  {i}: {card_name(code)}{tag}")
+                if finishable or cancelable:
+                    print("  -1: Finish/cancel")
+                while True:
+                    raw = input("  enter choice: ").strip()
+                    if raw == "-1" and (finishable or cancelable):
+                        send_i(-1)
+                        return
+                    if raw.isdigit() and 0 <= int(raw) < len(combined):
+                        send_b([1, int(raw)])
+                        return
+                    print("  invalid input, try again")
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_SUM:
+            mode = stream.u8()  # 0 = exact match required, 1 = "at least" mode
+            player = stream.u8()
+            acc = stream.u32()
+            min_sel = stream.u8()
+            max_sel = stream.u8()
+            must_n = stream.u8()
+            must_items = []
+            for _ in range(must_n):
+                code = stream.u32() & 0x7fffffff
+                stream.u8(); stream.u8(); stream.u8()
+                sum_param = stream.u32()
+                must_items.append((code, sum_param))
+            opt_n = stream.u8()
+            opt_items = []
+            for _ in range(opt_n):
+                code = stream.u32() & 0x7fffffff
+                stream.u8(); stream.u8(); stream.u8()
+                sum_param = stream.u32()
+                opt_items.append((code, sum_param))
+
+            def ask():
+                print(f"\n[player {player}] Select cards summing to {acc}:")
+                if must_items:
+                    print("  (must include:", ", ".join(card_name(c) for c, _ in must_items), ")")
+                codes = [c for c, _ in opt_items]
+                chosen = prompt_card_selection(codes, max(0, min_sel - must_n), max(0, max_sel - must_n))
+                send_b([len(chosen) + must_n] + chosen)
+            pending = interact(ask)
+
+        elif msg == MSG_SELECT_COUNTER:
+            player = stream.u8()
+            countertype = stream.u16()
+            count = stream.u16()
+            n = stream.u8()
+            items = []
+            for _ in range(n):
+                code = stream.u32() & 0x7fffffff
+                stream.u8(); stream.u8(); stream.u8()
+                cur_count = stream.u16()
+                items.append((code, cur_count))
+
+            def ask():
+                print(f"\n[player {player}] Distribute {count} counter(s) (type {countertype}) among:")
+                for i, (code, cur_count) in enumerate(items):
+                    print(f"  {i}: {card_name(code)} (has {cur_count})")
+                alloc = [0] * len(items)
+                remaining = count
+                while remaining > 0:
+                    idx = prompt_choice(len(items), "card index to allocate a counter to")
+                    if alloc[idx] >= items[idx][1]:
+                        print("  can't allocate more than that card has"); continue
+                    alloc[idx] += 1
+                    remaining -= 1
+                out = []
+                for a in alloc:
+                    out += [a & 0xff, (a >> 8) & 0xff]
+                send_b(out)
+            pending = interact(ask)
+
+        elif msg == MSG_SORT_CARD:
+            player = stream.u8()
+            n = stream.u8()
+            for _ in range(n):
+                stream.u32(); stream.u8(); stream.u8(); stream.u8()
+            # cosmetic reordering only -- always keep default order
+            send_i(0xff)
+            pending = stream.u8()
+
+        elif msg == MSG_ANNOUNCE_RACE:
+            player = stream.u8()
+            count = stream.u8()
+            available = stream.u32()
+            def ask():
+                print(f"\n[player {player}] Announce {count} race(s) (available bitmask {hex(available)}):")
+                raw = input("  enter race bitmask to declare: ").strip()
+                try:
+                    value = int(raw, 0)
+                except ValueError:
+                    value = 0
+                send_i(value)
+            pending = interact(ask)
+
+        elif msg == MSG_ANNOUNCE_ATTRIB:
+            player = stream.u8()
+            count = stream.u8()
+            available = stream.u32()
+            def ask():
+                print(f"\n[player {player}] Announce {count} attribute(s) (available bitmask {hex(available)}):")
+                raw = input("  enter attribute bitmask to declare: ").strip()
+                try:
+                    value = int(raw, 0)
+                except ValueError:
+                    value = 0
+                send_i(value)
+            pending = interact(ask)
+
+        elif msg == MSG_ANNOUNCE_CARD:
+            player = stream.u8()
+            n = stream.u8()
+            for _ in range(n):
+                stream.u32()  # opcode filter tree, not a simple enumerable option list
+            def ask():
+                print(f"\n[player {player}] Announce a card by name:")
+                name = input("  enter exact card name: ").strip()
+                card = get_card_by_name(name)
+                send_i(card["code"] if card else 0)
+            pending = interact(ask)
+
+        elif msg == MSG_ANNOUNCE_NUMBER:
+            player = stream.u8()
+            n = stream.u8()
+            options = [stream.u32() for _ in range(n)]
+            def ask():
+                print(f"\n[player {player}] Announce a number:")
+                for i, v in enumerate(options):
+                    print(f"  {i}: {v}")
+                choice = prompt_choice(len(options), "option")
+                send_i(choice)
+            pending = interact(ask)
+
+        elif msg == MSG_ROCK_PAPER_SCISSORS:
+            which_player = stream.u8()
+            def ask():
+                print(f"\n[player {which_player}] Rock-Paper-Scissors:")
+                print("  0: Rock  1: Paper  2: Scissors")
+                choice = prompt_choice(3, "throw")
+                send_i(choice)
+            pending = interact(ask)
+
+        else:
+            print(f"\n[!] Unhandled message type {msg} -- stopping here so nothing gets misparsed.")
+            print("    Tell Claude which message type this is and we'll add support for it.")
+            return
+
+if __name__ == "__main__":
+    try:
+        run()
+    except DuelEnded:
+        print("\n(no more messages; duel may be waiting or has ended)")

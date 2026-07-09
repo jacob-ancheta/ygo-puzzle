@@ -24,6 +24,9 @@ def search_cards(query, limit=15):
     conn.close()
     return rows
 
+CARD_COLS = ["code", "name", "type", "level", "attribute", "race", "attack", "defense",
+             "link_marker", "setcode", "alias", "lscale", "rscale"]
+
 def get_card_by_name(name):
     """Exact-match lookup for puzzle authoring. Returns None if no exact match
     (caller should fall back to search_cards() to show close matches)."""
@@ -34,8 +37,7 @@ def get_card_by_name(name):
     conn.close()
     if row is None:
         return None
-    cols = ["code", "name", "type", "level", "attribute", "race", "attack", "defense", "link_marker"]
-    return dict(zip(cols, row))
+    return dict(zip(CARD_COLS, row))
 
 def get_card(code):
     conn = sqlite3.connect(DB_PATH)
@@ -45,8 +47,7 @@ def get_card(code):
     conn.close()
     if row is None:
         return None
-    cols = ["code", "name", "type", "level", "attribute", "race", "attack", "defense", "link_marker"]
-    return dict(zip(cols, row))
+    return dict(zip(CARD_COLS, row))
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
