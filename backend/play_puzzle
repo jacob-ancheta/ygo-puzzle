@@ -5,12 +5,17 @@ from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Stru
 from card_lookup import get_card, get_card_by_name, search_cards
 from puzzle_definition import PUZZLE
 
-MINGW_BIN = r"C:\msys64\mingw64\bin"
+try:
+    from local_config import MINGW_BIN, DLL_PATH, SCRIPTS_DIR
+except ImportError:
+    raise SystemExit(
+        "Missing backend/local_config.py -- copy backend/local_config.example.py "
+        "to backend/local_config.py and edit it to point at your own ygopro-core "
+        "/ ygopro-scripts checkout."
+    )
+
 if os.path.exists(MINGW_BIN):
     os.add_dll_directory(MINGW_BIN)
-
-DLL_PATH = r"C:\msys64\home\Jacob\ygopro-core\libygo.dll"
-SCRIPTS_DIR = r"C:\msys64\home\Jacob\ygopro-scripts"
 
 # ---------- resolve names first, same as load_puzzle.py ----------
 def resolve_all(puzzle):
