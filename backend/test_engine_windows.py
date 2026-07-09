@@ -2,7 +2,6 @@ import os
 import ctypes
 from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Structure, CFUNCTYPE
 
-# --- point Windows at the MinGW runtime DLLs libygo.dll depends on ---
 MINGW_BIN = r"C:\msys64\mingw64\bin"
 if os.path.exists(MINGW_BIN):
     os.add_dll_directory(MINGW_BIN)
