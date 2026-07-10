@@ -525,8 +525,12 @@ def query_live_stats(engine):
 
 def decode_place_flag(flag, playerid):
     # bit layout per ygopro-core playerop.cpp field::select_place (bit set = zone blocked):
-    #   0-6: own mzone seq 0-6      8-12: own szone seq 0-4      14-15: own pzone (seq 6/7)
-    #   16-22: opp mzone seq 0-6    24-28: opp szone seq 0-4     30-31: opp pzone (seq 6/7)
+    #   0-6: own mzone seq 0-6      8-12: own szone seq 0-4   13: own fzone    14-15: own pzone (seq 6/7)
+    #   16-22: opp mzone seq 0-6    24-28: opp szone seq 0-4  29: opp fzone    30-31: opp pzone (seq 6/7)
+    # (field::is_location_useable checks the Field Zone's bit at
+    # `0x100 << (5 + sequence)` -- i.e. bit 13/29 -- confirmed against the
+    # actual ygopro-core source; this was previously missing entirely, which
+    # left Set Field Spell with zero placeable options.)
     opp = 1 - playerid
     options = []
     for s in range(7):
@@ -535,6 +539,8 @@ def decode_place_flag(flag, playerid):
     for s in range(5):
         if not (flag & (1 << (8 + s))):
             options.append((playerid, LOCATION_SZONE, s, f"Your Spell/Trap Zone {s}"))
+    if not (flag & (1 << 13)):
+        options.append((playerid, LOCATION_SZONE, 5, "Your Field Zone"))
     if not (flag & (1 << 14)):
         options.append((playerid, LOCATION_SZONE, 6, "Your Pendulum Zone (left)"))
     if not (flag & (1 << 15)):
@@ -545,6 +551,8 @@ def decode_place_flag(flag, playerid):
     for s in range(5):
         if not (flag & (1 << (24 + s))):
             options.append((opp, LOCATION_SZONE, s, f"Opponent Spell/Trap Zone {s}"))
+    if not (flag & (1 << 29)):
+        options.append((opp, LOCATION_SZONE, 5, "Opponent Field Zone"))
     if not (flag & (1 << 30)):
         options.append((opp, LOCATION_SZONE, 6, "Opponent Pendulum Zone (left)"))
     if not (flag & (1 << 31)):
@@ -1152,7 +1160,15 @@ def run(engine):
         elif msg == MSG_SELECT_CHAIN:
             player = stream.u8()
             count = stream.u8()
-            stream.u8()   # spe_count, UI-only
+            # spe_count (per ygopro-core processor.cpp: "# of optional trigger
+            # effects") -- the leading spe_count entries in the options list
+            # below are effects that just triggered off a real game event
+            # (e.g. "if this card is sent to the GY..."); anything after that
+            # is an incidentally-available quick effect with nothing actually
+            # triggering it. Only the latter is safe to auto-pass when the
+            # priority toggle is off -- auto-passing a real simultaneous
+            # trigger silently discards it instead of skipping a choice.
+            spe_count = stream.u8()
             stream.u32()  # hint_timing (self)
             stream.u32()  # hint_timing (opponent)
             chains = []
@@ -1190,12 +1206,12 @@ def run(engine):
                     if any_forced:
                         choice = yield from ask_index(
                             {"type": "prompt", "prompt": "chain", "player": player,
-                             "options": options, "can_pass": False,
+                             "options": options, "can_pass": False, "spe_count": spe_count,
                              "note": "auto-pass wasn't legal"}, len(chains))
                     else:
                         choice = yield from _ask_chain_or_pass(
                             dict(prompt="chain", player=player, options=options,
-                                 note="auto-pass wasn't legal"))
+                                 spe_count=spe_count, note="auto-pass wasn't legal"))
                     engine.send_i(choice)
                 pending = yield from interact(engine, ask)
             elif chains and player != 1:
@@ -1205,10 +1221,10 @@ def run(engine):
                     if any_forced:
                         choice = yield from ask_index(
                             {"type": "prompt", "prompt": "chain", "player": player,
-                             "options": options, "can_pass": False}, len(chains))
+                             "options": options, "can_pass": False, "spe_count": spe_count}, len(chains))
                     else:
                         choice = yield from _ask_chain_or_pass(
-                            dict(prompt="chain", player=player, options=options))
+                            dict(prompt="chain", player=player, options=options, spe_count=spe_count))
                     engine.send_i(choice)
                 pending = yield from interact(engine, ask)
 
