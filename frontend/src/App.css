@@ -109,7 +109,7 @@
 }
 
 .board-main {
-  flex: 5; /* 5 card-row-heights (2 spell + 2 monster + 1 emz), matched against hand-row's flex: 1 below */
+  flex: 5 1 0; /* 5 card-row-heights (2 spell + 2 monster + 1 emz), matched against hand-row's flex below -- explicit 0 basis so hand-area's basis (below) comes off this side first */
   min-height: 0;
   display: flex;
   gap: 18px;
@@ -178,8 +178,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(16px, 2.4vh, 34px); /* generous on purpose: rotated defense-position tiles are wider than their slot and would overlap a tighter gap */
-  overflow-x: auto; /* safety net now that each row is 7 slots wide (Deck/GY/Banish/Field/Extra flanking the 5 play zones) */
+  gap: clamp(28px, 5.6vh, 90px); /* generous on purpose: full-resolution (unshrunk) rotated defense-position tiles are wider than their slot and would overlap a tighter gap -- see .card-tile.defense */
+  /* No overflow-x here on purpose: setting overflow on either axis forces
+     the other to clip too (a CSS overflow-x/-y coupling rule), which cut
+     the actionable/selected glow (box-shadow, meant to bleed past the
+     card's own box) off flush at the row's top and bottom edge. The
+     7-slot-wide rows (Deck/GY/Banish/Field/Extra flanking the 5 play
+     zones) fit comfortably without scrolling, so there's nothing to trade
+     that clipping for. */
 }
 
 .card-slot.invisible {
@@ -223,7 +229,11 @@
 .phase-button:disabled { opacity: 1; }
 
 .hand-area {
-  flex: 1; /* 1 card-row-height, matched against board-main's flex: 5 above */
+  /* A flex-basis head start (rather than plain "flex: 1") so the glow
+     padding added to .hand-row/.pile-view-row/.selection-overlay doesn't
+     eat into hand card size -- it comes off board-main's 5 rows instead,
+     where it's spread thin enough to be imperceptible. */
+  flex: 1 1 24px;
   min-height: 0;
   position: relative;
   display: flex;
@@ -237,7 +247,12 @@
   align-items: center;
   justify-content: center;
   border-top: 1px solid var(--ink-700);
-  padding-top: 10px;
+  /* Vertical padding on both sides (not just top) so the actionable/
+     selected glow -- which bleeds past the card's own box via box-shadow
+     -- has room before hitting this row's own edge; overflow-x:auto below
+     forces overflow-y to clip too (they can't be set independently), so
+     without this the glow got flattened off at the top and bottom. */
+  padding: 16px 0;
   overflow-x: auto; /* safety net for a puzzle with enough hand cards to not fit one row's width */
 }
 
@@ -262,7 +277,10 @@
      off the vertical centering of the card row relative to the box's
      bottom edge. */
   box-shadow: inset 0 2px 0 0 var(--accent), 0 -8px 24px rgba(0, 0, 0, 0.55);
-  padding: 8px 14px;
+  /* Vertical padding wide enough that the actionable/selected glow (which
+     bleeds past a card's own box via box-shadow) doesn't hit the
+     overflow-y: hidden edge above and get flattened off. */
+  padding: 16px 14px;
   animation: selection-overlay-slide-up 0.2s ease-out;
 }
 
@@ -337,14 +355,36 @@
 
 .card-tile.small { width: 48px; height: 68px; }
 
-.card-tile.defense { transform: rotate(90deg) scale(0.82); }
+/* No scale here on purpose -- a defense-position card is the same card
+   just turned sideways, so it should keep its full resolution (width and
+   height swapped, not shrunk). That makes it wider than its own slot; the
+   .zone-row gap below is sized generously enough to absorb that overflow
+   without adjacent defense-position monsters visually colliding. */
+.card-tile.defense { transform: rotate(90deg); }
 
 .card-tile.face-down .card-face { display: none; }
+/* Flat, borderless card back -- same gradient as .card-tile itself (so a
+   face-down card reads as part of the same family, not a separate motif),
+   with a low-contrast oval watermark instead of a framed emblem. */
 .card-back {
   width: 100%;
   height: 100%;
-  background: repeating-linear-gradient(135deg, var(--ink-700), var(--ink-700) 6px, var(--ink-800) 6px, var(--ink-800) 12px);
   border-radius: 4px;
+  position: relative;
+  background: linear-gradient(160deg, var(--ink-700), var(--ink-800));
+}
+
+.card-back::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 42%;
+  height: 58%;
+  background: var(--ink-950);
+  opacity: 0.55;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .card-face {
@@ -497,7 +537,11 @@
   border: 1px solid var(--ink-600);
   border-radius: 10px 10px 0 0;
   box-shadow: inset 0 2px 0 0 var(--accent), 0 -8px 24px rgba(0, 0, 0, 0.55);
-  padding: 8px 14px;
+  /* No vertical padding here -- .pile-view-row below already reserves its
+     own glow clearance, and stacking this overlay's padding on top of that
+     (rather than .selection-overlay, which has no such inner layer) was
+     shrinking pile-browser cards noticeably smaller than hand/field cards. */
+  padding: 0 14px;
   animation: selection-overlay-slide-up 0.2s ease-out;
 }
 
@@ -547,6 +591,10 @@
   align-items: center;
   justify-content: center;
   overflow-x: auto;
+  /* See .hand-row's comment -- overflow-x:auto forces overflow-y to clip
+     too, which flattened the actionable glow off at the top/bottom
+     without this breathing room. */
+  padding: 16px 0;
 }
 
 /* ---------- card detail panel ---------- */
