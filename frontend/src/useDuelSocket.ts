@@ -56,10 +56,31 @@ export function useDuelSocket(url: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Guard against sending twice for the same prompt: React StrictMode (dev
+  // only) double-invokes setState updater functions, and a couple of call
+  // sites used to build their response *inside* one (e.g. App.tsx's
+  // handlePlaceChoice, via setSelection(prev => { ...; respond(...) })), so
+  // a single click could fire this twice -- confirmed live, see below.
+  // server.py's driver loop calls `await websocket.receive_json()` exactly
+  // once per prompt with no validation that the reply matches what was
+  // actually asked, so a second, stray send doesn't get rejected -- it
+  // silently becomes the answer to whatever prompt comes *next*, corrupting
+  // an unrelated decision (reproduced: a duplicate zone-placement answer got
+  // consumed as the reply to the following position prompt, which the
+  // engine then rejected as invalid).
+  //
+  // respondedForRef tracks *which prompt* was last answered, by reference,
+  // so a second call for the same still-current prompt is a no-op -- this
+  // must NOT live inside a setState updater callback itself (an earlier
+  // version did exactly that, and StrictMode double-invoking that very
+  // updater defeated it -- the guard's own side effect got doubled too).
+  const respondedForRef = useRef<Record<string, unknown> | null>(null);
   const respond = useCallback((response: Record<string, unknown>) => {
+    if (respondedForRef.current === prompt) return;
+    respondedForRef.current = prompt;
     wsRef.current?.send(JSON.stringify(response));
     setPrompt(null);
-  }, []);
+  }, [prompt]);
 
   return { board, prompt, connected, error, connect, respond };
 }

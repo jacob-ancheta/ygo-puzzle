@@ -500,6 +500,52 @@
   transform: translateY(-3px) rotate(90deg);
 }
 
+/* Pulse marking the card the opponent just activated -- see Board.tsx's
+   enlargedKey timer (cleared automatically after ~2s). A longer, dedicated
+   transition than the general hover one above so the scale-up reads as a
+   deliberate cue rather than a hover flicker. */
+.card-tile.enlarged {
+  transform: scale(1.18);
+  z-index: 5;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 20px 6px var(--glow-soft);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.card-tile.defense.enlarged {
+  transform: rotate(90deg) scale(1.18);
+}
+
+@keyframes chain-link-flash {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+/* Large flashing chain-link number overlaid on an .enlarged card -- makes
+   it unambiguous *which* link in the chain is currently resolving, not just
+   that something is happening. Centered over the whole tile regardless of
+   attack/defense rotation (defense tiles are rotated via transform on the
+   parent .card-tile, but this badge is a sibling positioned absolutely
+   within it, so it inherits that rotation too -- rotate it back so the
+   number itself always reads upright; the flash keyframe only animates
+   opacity so it doesn't fight that static transform). */
+.chain-link-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--ink-50);
+  text-shadow: 0 0 6px var(--accent), 0 0 14px var(--accent), 0 2px 4px rgba(0, 0, 0, 0.8);
+  animation: chain-link-flash 0.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.card-tile.defense .chain-link-badge {
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
 /* ---------- pile cells (Deck/Extra/GY/Banished/Field, in the field grid) ---------- */
 
 /* Unoccupied -- reuses the plain .card-slot.empty look (centering included),

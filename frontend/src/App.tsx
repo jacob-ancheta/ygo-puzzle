@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { useDuelSocket } from "./useDuelSocket";
-import Board, { type PileView } from "./components/Board";
+import Board, { type PileView, type PendingPlacementView } from "./components/Board";
 import ActionMenu from "./components/ActionMenu";
 import PromptOverlay from "./components/PromptOverlay";
 import SelectionBar from "./components/SelectionBar";
 import CardDetailPanel from "./components/CardDetailPanel";
+import CardTile from "./components/CardTile";
 import { nonCardOptions } from "./interaction";
+import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { WS_URL } from "./config";
 import type { CardRef, IdleBattleOption } from "./protocol";
 
@@ -19,27 +21,39 @@ const HIDDEN_ACTIONS = new Set(["shuffle_hand"]);
 
 // Actions that skip straight to committing (Summon, Set, attack, ...) stay
 // as-is; these ones interrupt with a confirm step first, since choosing them
-// is otherwise irreversible and there's no other point of no return (e.g.
-// clicking to place a card) to catch a misclick. "Set Spell/Trap" is here
-// specifically so clicking a hand spell/trap with only one option (Set)
-// doesn't commit blind -- Set Monster is left alone since only spells/traps
-// were reported as a problem.
+// is otherwise irreversible and there's no other point of no return to catch
+// a misclick. Set Monster/Set Spell/Trap are deliberately NOT here -- both
+// commit straight to the (already glow-highlighted) zone-placement prompt,
+// same as Special Summon material selection does elsewhere.
 function needsConfirm(action: string): boolean {
-  return action === "Activate" || action === "activate" || action === "Special Summon"
-    || action === "Set Spell/Trap";
+  return action === "Activate" || action === "activate" || action === "Special Summon";
 }
 
 function confirmLabel(action: string, cardName: string): string {
   if (action === "Special Summon") return `Special Summon ${cardName}?`;
-  if (action === "Set Spell/Trap") return `Set ${cardName}?`;
   return `Activate effect of ${cardName}?`;
 }
 
-// "Set Spell/Trap" reads better as Set/Cancel than a generic Yes/No.
-function confirmButtonLabels(action: string): { confirm: string; cancel: string } {
-  if (action === "Set Spell/Trap") return { confirm: "Set", cancel: "Cancel" };
-  return { confirm: "Yes", cancel: "No" };
+// Set Monster/Set Spell-Trap/Normal Summon all place onto one of the
+// player's own 5 main zones -- for these (and only these), the target zone
+// is guessed client-side (see boardState.ts's guessOpenZones) so the zones
+// can glow, with a free Cancel, before anything is sent to the server.
+// Special Summon and Activate stay on the old confirm-then-ask-server path.
+function locationIdForPlacementAction(action: string): number | null {
+  if (action === "Set Spell/Trap") return LOC.SZONE;
+  if (action === "Summon" || action === "Set Monster") return LOC.MZONE;
+  return null;
 }
+
+function isPlacementAction(action: string): boolean {
+  return locationIdForPlacementAction(action) !== null;
+}
+
+function placementLabel(action: string, isFieldSpell: boolean): string {
+  if (action === "Set Spell/Trap") return isFieldSpell ? "Choose the Field Zone" : "Choose a Spell/Trap Zone";
+  return "Choose a Monster Zone";
+}
+
 
 interface MenuState {
   card?: CardRef;
@@ -77,6 +91,63 @@ export default function App() {
   // the eventual "place" prompt, not just the very next one.
   const prevPromptKindRef = useRef<string | undefined>(undefined);
 
+  // A Summon/Set whose target zone is still a client-side guess -- see
+  // locationIdForPlacementAction/guessOpenZones. `chosenSequence` stays null
+  // while the player can still freely Cancel (nothing sent to the server
+  // yet); once they click a guessed zone it's set and this becomes a
+  // "waiting for the server's real place prompt to confirm or correct the
+  // guess" marker instead (see the effect below).
+  interface PendingPlacementState extends PendingPlacementView {
+    idx: number;
+    chosenSequence: number | null;
+  }
+  const [pendingPlacement, setPendingPlacement] = useState<PendingPlacementState | null>(null);
+
+  function startPlacement(card: CardRef, idx: number, action: string) {
+    const locationId = locationIdForPlacementAction(action);
+    if (locationId === null) {
+      respond({ choice: idx });
+      return;
+    }
+    const isFieldSpell = locationId === LOC.SZONE && card.type !== undefined && Boolean(card.type & TYPE_FIELD);
+    setPendingPlacement({
+      card, idx, locationId,
+      label: placementLabel(action, isFieldSpell),
+      openSequences: guessOpenZones(board, locationId, isFieldSpell),
+      chosenSequence: null,
+    });
+  }
+
+  function handleGuessedZoneClick(sequence: number) {
+    if (!pendingPlacement) return;
+    setCommittedCard(pendingPlacement.card);
+    respond({ choice: pendingPlacement.idx });
+    setPendingPlacement({ ...pendingPlacement, chosenSequence: sequence });
+  }
+
+  function handleCancelPlacement() {
+    setPendingPlacement(null);
+  }
+
+  // Once the server's real "place" prompt comes back for a zone the player
+  // already picked locally, auto-confirm it there so they don't have to
+  // click twice -- the server is still the authority: if our guess doesn't
+  // actually appear among its real options (a lock we couldn't have known
+  // about client-side), this just backs off and lets the normal place-prompt
+  // UI show the *real* legal zones instead.
+  useEffect(() => {
+    if (!pendingPlacement || pendingPlacement.chosenSequence === null) return;
+    if (prompt?.prompt !== "place") return;
+    const options = prompt!.options as { controller: number; location_id: number; sequence: number }[];
+    const matchIdx = options.findIndex((o) => o.controller === 0
+      && o.location_id === pendingPlacement.locationId && o.sequence === pendingPlacement.chosenSequence);
+    if (matchIdx !== -1 && (prompt!.count as number) === 1) {
+      respond({ indices: [matchIdx] });
+    }
+    setPendingPlacement(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt, pendingPlacement]);
+
   useEffect(() => {
     setMenu(null);
     setConfirmAction(null);
@@ -89,6 +160,104 @@ export default function App() {
     prevPromptKindRef.current = currentKind;
   }, [prompt]);
 
+  // Queue of opponent activations still waiting for their own glow+notice
+  // turn, plus `current` (the one actually being shown right now). This is
+  // a queue and not just a single slot because multiple opponent cards can
+  // chain in quick succession -- e.g. Futsu reborning Murakumo immediately
+  // opens Murakumo's own "if Special Summoned" trigger as a second
+  // activation on the very same tick -- and each one still needs its own
+  // full glow-then-notice cycle instead of a later one silently replacing
+  // an earlier one that was never actually shown.
+  interface NoticeItem { card: CardRef; chainLink?: number; board: BoardState }
+  const [noticeQueue, setNoticeQueue] = useState<NoticeItem[]>([]);
+  const [current, setCurrent] = useState<NoticeItem | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Enqueue every new opponent activation -- deliberately never overwrites
+  // `current` or anything already queued. Reads board.chainNotices (an
+  // append-only log the reducer builds, one entry per "chaining" event --
+  // see boardState.ts) rather than watching board.currentChainLocation for
+  // transitions: several WS messages (and their setBoard calls) can land in
+  // the same React commit, and a watcher keyed on a single scalar's identity
+  // would only ever see the last of those, silently dropping the rest (e.g.
+  // Murakumo's own trigger, opened by Futsu reborning it on the same tick,
+  // never getting its own notice). Diffing against how many of the log's
+  // entries have already been queued catches all of them regardless.
+  const consumedNoticesRef = useRef(0);
+  useEffect(() => {
+    const all = board.chainNotices;
+    if (all.length < consumedNoticesRef.current) {
+      // The log is shorter than what we've already consumed -- board was
+      // reset for a new attempt (useDuelSocket's connect()), not a normal
+      // append. Drop anything left over from the previous attempt instead
+      // of getting stuck thinking every future entry was already consumed.
+      consumedNoticesRef.current = 0;
+      setNoticeQueue([]);
+      setCurrent(null);
+    }
+    if (consumedNoticesRef.current >= all.length) return;
+    const fresh = all.slice(consumedNoticesRef.current);
+    consumedNoticesRef.current = all.length;
+    setNoticeQueue((q) => [...q, ...fresh]);
+  }, [board.chainNotices]);
+
+  // Advance the queue once we're free to show the next one. The reveal
+  // timer here (like the old single-slot version) deliberately isn't tied
+  // to a cleanup keyed on board changes -- the chain a queued activation
+  // belongs to can fully resolve server-side (chain_end) faster than the 2s
+  // reveal window, and it must still get its full glow duration and still
+  // require an explicit acknowledgment either way.
+  useEffect(() => {
+    if (current || noticeQueue.length === 0) return;
+    setCurrent(noticeQueue[0]);
+    setNoticeQueue((q) => q.slice(1));
+    setRevealed(false);
+    if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+    revealTimerRef.current = setTimeout(() => {
+      setRevealed(true);
+      revealTimerRef.current = null;
+    }, 2000);
+  }, [current, noticeQueue]);
+
+  // Only for real unmount, not every board update -- see the note above.
+  useEffect(() => {
+    return () => { if (revealTimerRef.current) clearTimeout(revealTimerRef.current); };
+  }, []);
+
+  const promptKind = prompt?.prompt as string | undefined;
+  // Is the *live*, current decision point a chain response opportunity the
+  // opponent's activation just opened for the player? Derived from live
+  // board state (not `notice`) so it's never stale once the chain actually
+  // ends or a different, player-caused chain starts -- `notice`/`revealed`
+  // above are purely about the notice's own display timing, decoupled from
+  // whether a real response is still pending. Forced responses always show
+  // the real interactive prompt regardless of the toggle.
+  const liveOpponentChain = board.currentChainLocation?.controller === 1;
+  const liveChainResponse = promptKind === "chain" && prompt?.player === 0 && liveOpponentChain;
+  const showInteractiveOverlay = liveChainResponse && revealed && (prompt?.can_pass === false || priorityOn);
+  // Toggle off (or nothing for the player to respond with at all, e.g. a
+  // simultaneous trigger that only the opponent could act on) -- once
+  // revealed, show the passive notice instead.
+  const showResolvingModal = current !== null && revealed && !showInteractiveOverlay;
+  // True whenever there's a pending opponent-activation notice (the current
+  // one, or anything still queued behind it) that hasn't been resolved yet
+  // and we're not instead handing the player a direct interactive chain
+  // response. In all of these states, whatever the *actual* current server
+  // prompt is (chain, yesno, effectyn, a follow-up card selection, ...) must
+  // stay completely hidden -- otherwise a further decision belonging to the
+  // same activation (e.g. Murakumo's discard-or-negate yesno) renders on
+  // top of / at the same time as the glow or the notice, instead of only
+  // appearing once that's dismissed. Gating on `current` alone (not the
+  // rest of the queue) is deliberate: once the front of the queue is
+  // dismissed, whatever's next takes its own turn on the next render.
+  const promptHeldForNotice = current !== null && !showInteractiveOverlay;
+  // Every other piece of prompt-driven UI below (Board's own rendering,
+  // SelectionBar, PromptOverlay, ...) is keyed off this instead of the raw
+  // `prompt` so a held prompt is treated as if nothing were pending yet.
+  const effectivePrompt = promptHeldForNotice ? null : prompt;
+  const effectivePromptKind = effectivePrompt?.prompt as string | undefined;
+
   // Priority toggle OFF: whenever a quick-effect window opens (an optional
   // "chain" prompt -- activate something now, or pass), skip the prompt and
   // pass immediately instead of asking -- this is meant for always-available
@@ -98,22 +267,27 @@ export default function App() {
   // handling) means at least one offered card's own state just changed --
   // a genuine simultaneous trigger -- and those must always be shown,
   // toggle or not, since silently passing them means they never happen at
-  // all rather than just skipping a response window.
+  // all rather than just skipping a response window. Opponent-caused chains
+  // are handled separately above (via the "Resolving X" modal, which waits
+  // for an explicit OK instead of silently auto-passing).
   useEffect(() => {
-    if (priorityOn) return;
+    if (priorityOn || liveChainResponse) return;
     if (prompt?.prompt === "chain" && prompt.can_pass === true && prompt.player === 0
         && !prompt.fresh_trigger) {
       respond({ pass: true });
     }
-  }, [prompt, priorityOn, respond]);
+  }, [prompt, priorityOn, liveChainResponse, respond]);
 
-  const promptKind = prompt?.prompt as string | undefined;
-  const isBoardPrompt = promptKind !== undefined && BOARD_PROMPTS.has(promptKind);
-  const isModalPrompt = prompt !== null && !isBoardPrompt;
+  const isBoardPrompt = effectivePromptKind !== undefined && BOARD_PROMPTS.has(effectivePromptKind);
+  const isModalPrompt = effectivePrompt !== null && !isBoardPrompt;
 
   function handleCardMenu(card: CardRef, options: { option: IdleBattleOption; idx: number }[], x: number, y: number) {
     if (options.length === 1) {
       const { option, idx } = options[0];
+      if (isPlacementAction(option.action)) {
+        startPlacement(card, idx, option.action);
+        return;
+      }
       if (needsConfirm(option.action)) {
         setConfirmAction({ label: confirmLabel(option.action, card.name), action: option.action, idx, card });
         return;
@@ -140,22 +314,32 @@ export default function App() {
   function handlePlaceChoice(idx: number) {
     if (!prompt) return;
     const count = prompt.count as number;
-    setSelection((prev) => {
-      if (prev.includes(idx)) return prev.filter((i) => i !== idx);
-      const next = [...prev, idx];
-      if (next.length >= count) {
-        respond({ indices: next });
-        return [];
-      }
-      return next;
-    });
+    // Deliberately not a setSelection(prev => ...) updater: React StrictMode
+    // (dev only) double-invokes those, and respond() living inside one meant
+    // a single click could send the answer twice -- see the guard in
+    // useDuelSocket's respond() for the full story. Reading `selection`
+    // directly here is safe precisely because this function isn't itself a
+    // setState updater.
+    if (selection.includes(idx)) {
+      setSelection(selection.filter((i) => i !== idx));
+      return;
+    }
+    const next = [...selection, idx];
+    if (next.length >= count) {
+      respond({ indices: next });
+      setSelection([]);
+    } else {
+      setSelection(next);
+    }
   }
 
   function handleChainChoice(idx: number) {
+    setCurrent(null);
     respond({ choice: idx });
   }
 
   function handleChainPass() {
+    setCurrent(null);
     respond({ pass: true });
   }
 
@@ -180,9 +364,30 @@ export default function App() {
     respond({ choice: idx });
   }
 
-  const nonCard = (isBoardPrompt ? nonCardOptions(prompt) : []).filter(({ option }) => !HIDDEN_ACTIONS.has(option.action));
-  const isMultiSelect = promptKind !== undefined && MULTI_SELECT_PROMPTS.has(promptKind);
-  const forWhom = board.currentChainCard ? ` for ${board.currentChainCard.name}` : "";
+  const nonCard = (isBoardPrompt ? nonCardOptions(effectivePrompt) : []).filter(({ option }) => !HIDDEN_ACTIONS.has(option.action));
+  const isMultiSelect = effectivePromptKind !== undefined && MULTI_SELECT_PROMPTS.has(effectivePromptKind);
+  // Prefer the prompt's own "source" (the card whose effect is asking,
+  // attached server-side -- see duel_engine.py's chain_source()) over the
+  // client-tracked board.currentChainCard: with simultaneous/nested chain
+  // links, several "chaining" events can arrive (or get batched by React)
+  // before this exact prompt is rendered, leaving board.currentChainCard
+  // pointing at a *later* link than the one this prompt is actually for.
+  // The fallback stays for prompt kinds that don't carry "source" (e.g. the
+  // "chain" prompt itself, which lists its own per-option cards instead).
+  const promptSource = (effectivePrompt?.source as CardRef | undefined) ?? board.currentChainCard;
+  const forWhom = promptSource ? ` for ${promptSource.name}` : "";
+
+  // What the *board* actually renders: while an opponent-activation notice
+  // is up, freeze on that notice's own snapshot (see chainNotices in
+  // boardState.ts) instead of the live board -- the server resolves a whole
+  // chain (e.g. Futsu reborning Murakumo, which immediately destroys the
+  // player's monsters) in one uninterrupted burst with nothing for a human
+  // to decide in between, so the live board would otherwise already show
+  // the end result before the Futsu/Murakumo notices ever got their turn.
+  // Every other piece of logic below (legal-zone guessing, prompts, ...)
+  // deliberately keeps reading the live `board`, not this -- only what's
+  // actually painted on screen should lag.
+  const displayBoard = current?.board ?? board;
 
   function handlePhaseClick(x: number, y: number) {
     if (nonCard.length === 0) return;
@@ -207,7 +412,7 @@ export default function App() {
       <button
         className={`priority-toggle ${priorityOn ? "on" : "off"}`}
         onClick={() => setPriorityOn((v) => !v)}
-        title="When OFF, priority is passed automatically whenever a quick effect could be activated"
+        title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
       >
         <span className="priority-toggle-label">Toggle</span>
         <span className="priority-toggle-state">{priorityOn ? "ON" : "OFF"}</span>
@@ -224,14 +429,14 @@ export default function App() {
         </div>
       ) : null}
 
-      {board.status !== "playing" && (
-        <div className={`status-banner ${board.status}`}>{board.statusMessage}</div>
+      {displayBoard.status !== "playing" && (
+        <div className={`status-banner ${displayBoard.status}`}>{displayBoard.statusMessage}</div>
       )}
 
       <main className="app-main">
         <Board
-          board={board}
-          prompt={prompt}
+          board={displayBoard}
+          prompt={effectivePrompt}
           selection={selection}
           onCardMenu={handleCardMenu}
           onSelectToggle={handleSelectToggle}
@@ -246,33 +451,36 @@ export default function App() {
           setPileView={setPileView}
           pendingFinalChoice={pendingFinalChoice}
           placingCardFallback={committedCard}
+          pendingPlacement={pendingPlacement && pendingPlacement.chosenSequence === null ? pendingPlacement : null}
+          onGuessedZoneClick={handleGuessedZoneClick}
+          onCancelPlacement={handleCancelPlacement}
         />
         <CardDetailPanel card={detailCard} />
       </main>
 
-      {isMultiSelect && prompt && !pileView && (
+      {isMultiSelect && effectivePrompt && !pileView && (
         <SelectionBar
-          label={promptKind === "sum" ? `Cards summing to ${prompt.target}` : `Select ${promptKind}${forWhom}`}
+          label={effectivePromptKind === "sum" ? `Cards summing to ${effectivePrompt.target}` : `Select ${effectivePromptKind}${forWhom}`}
           count={selection.length}
-          min={prompt.min as number}
-          max={prompt.max as number}
-          canConfirm={selection.length >= (prompt.min as number) && selection.length <= (prompt.max as number)}
+          min={effectivePrompt.min as number}
+          max={effectivePrompt.max as number}
+          canConfirm={selection.length >= (effectivePrompt.min as number) && selection.length <= (effectivePrompt.max as number)}
           onConfirm={() => respond({ indices: selection })}
         />
       )}
 
-      {promptKind === "select_unselect" && prompt && !pileView && (
+      {effectivePromptKind === "select_unselect" && effectivePrompt && !pileView && (
         <SelectionBar
           label={`Select/unselect cards${forWhom}`}
           count={
-            (prompt.items as { already_selected?: boolean }[]).filter((i) => i.already_selected).length +
+            (effectivePrompt.items as { already_selected?: boolean }[]).filter((i) => i.already_selected).length +
             (pendingFinalChoice !== null ? 1 : 0)
           }
-          min={prompt.min as number}
-          max={prompt.max as number}
+          min={effectivePrompt.min as number}
+          max={effectivePrompt.max as number}
           canConfirm={pendingFinalChoice !== null}
           onConfirm={() => { respond({ choice: pendingFinalChoice }); setPendingFinalChoice(null); }}
-          canFinish={Boolean(prompt.can_finish)}
+          canFinish={Boolean(effectivePrompt.can_finish)}
           finishLabel={pendingFinalChoice !== null ? "Cancel" : "Finish"}
           onFinish={() => { respond({ finish: true }); setPendingFinalChoice(null); }}
         />
@@ -286,6 +494,14 @@ export default function App() {
           disableOutsideClose={confirmAction !== null}
           onChoose={(idx) => {
             const chosen = menu.options.find((o) => o.idx === idx);
+            if (chosen && isPlacementAction(chosen.option.action)) {
+              const c = chosen.option.card ?? menu.card;
+              if (c) {
+                startPlacement(c, idx, chosen.option.action);
+                setMenu(null);
+                return;
+              }
+            }
             if (chosen && needsConfirm(chosen.option.action)) {
               setConfirmAction({
                 label: confirmLabel(chosen.option.action, chosen.option.card?.name ?? "this card"),
@@ -317,17 +533,42 @@ export default function App() {
                   setMenu(null);
                 }}
               >
-                {confirmButtonLabels(confirmAction.action).confirm}
+                Yes
               </button>
               <button className="btn" onClick={() => setConfirmAction(null)}>
-                {confirmButtonLabels(confirmAction.action).cancel}
+                No
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {isModalPrompt && prompt && <PromptOverlay prompt={prompt} respond={respond} contextCard={board.currentChainCard} />}
+      {showResolvingModal && current && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>
+              Resolving {current.card.name}
+              {current.chainLink !== undefined ? ` (chain link ${current.chainLink})` : ""}
+            </h3>
+            <div className="modal-card">
+              <CardTile card={current.card} />
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn primary"
+                onClick={() => {
+                  if (liveChainResponse && prompt?.can_pass === true) respond({ pass: true });
+                  setCurrent(null);
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isModalPrompt && effectivePrompt && <PromptOverlay prompt={effectivePrompt} respond={respond} contextCard={promptSource} />}
     </div>
   );
 }

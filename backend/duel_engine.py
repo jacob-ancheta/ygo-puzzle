@@ -23,6 +23,7 @@ import ctypes
 from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Structure, CFUNCTYPE
 
 from card_lookup import get_card, get_card_by_name, search_cards
+from opponent_ai import OpponentAI
 
 try:
     from local_config import MINGW_BIN, DLL_PATH, SCRIPTS_DIR
@@ -51,6 +52,7 @@ def resolve_all(puzzle):
     names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
     names += [e["name"] for e in puzzle.get("player_field", [])]
     names += puzzle.get("player_banished", [])
+    names += puzzle.get("opponent_graveyard", [])
     resolved, failed = {}, []
     for name in names:
         card = get_card_by_name(name)
@@ -191,6 +193,7 @@ lib.query_field_card.argtypes = [ctypes.c_ssize_t, ctypes.c_uint8, ctypes.c_uint
 
 LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE, LOCATION_EXTRA = 0x01, 0x02, 0x04, 0x08, 0x40
 LOCATION_REMOVED = 0x20
+LOCATION_GY = 0x10
 POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE = 0x1, 0x4
 QUERY_ATTACK, QUERY_DEFENSE = 0x100, 0x200
 TYPE_LINK = 0x4000000
@@ -263,6 +266,7 @@ class DuelEngine:
     def __init__(self, puzzle, seed=None):
         self.puzzle = puzzle
         self.resolved = resolve_all(puzzle)
+        self.opponent_ai = OpponentAI(puzzle, self.resolved)
         if seed is None:
             seed = random.getrandbits(32)
         self.pduel = lib.create_duel(ctypes.c_uint32(seed))
@@ -289,6 +293,11 @@ class DuelEngine:
             self._place(card["code"], 0, LOCATION_MZONE, i, pos)
         for i, name in enumerate(puzzle.get("player_banished", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_REMOVED, i, POS_FACEUP_ATTACK)
+        # Optional -- seeds the opponent's graveyard so effects like Futsu no
+        # Mitama no Mitsurugi's "target 1 Reptile monster in your GY; Special
+        # Summon it" have something to reborn from a puzzle's very start.
+        for i, name in enumerate(puzzle.get("opponent_graveyard", [])):
+            self._place(self.resolved[name]["code"], 1, LOCATION_GY, i, POS_FACEUP_ATTACK)
 
         lib.start_duel(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(DUEL_ATTACK_FIRST_TURN))
 
@@ -350,6 +359,7 @@ def initial_board_state(engine):
             for i, entry in enumerate(puzzle.get("player_field", []))
         ],
         "player_banished": [brief(name) for name in puzzle.get("player_banished", [])],
+        "opponent_graveyard": [brief(name) for name in puzzle.get("opponent_graveyard", [])],
     }
 
 
@@ -664,6 +674,23 @@ def run(engine):
     # latter. Reset at MSG_SELECT_IDLECMD/MSG_SELECT_BATTLECMD, the points
     # where the player regains that normal open-game-state control.
     recently_touched = set()
+    # Code of whatever was most recently added to the chain (any player) --
+    # i.e. "the thing currently being responded to". Drives eff_behaviour's
+    # `respond_to` restriction for the opponent AI (see opponent_ai.py).
+    last_chaining_code = None
+
+    def chain_source():
+        # Attached to prompts whose UI needs "who is asking" (e.g. "select a
+        # card for X") -- reading last_chaining_code here, synchronously in
+        # the same generator step that builds the prompt, is immune to the
+        # client-side staleness a board-state-derived label is prone to: with
+        # simultaneous/nested chain links, the browser can receive several
+        # "chaining" events before it ever renders the one a given prompt
+        # actually belongs to (batched WS delivery, or a deliberately paused
+        # notice queue for opponent activations -- see App.tsx), so by the
+        # time it renders, a client-tracked "most recent chaining card" may
+        # already reflect a *later* link than the prompt in hand.
+        return card_brief(last_chaining_code) if last_chaining_code is not None else None
 
     while True:
         msg = pending if pending is not None else stream.u8()
@@ -728,12 +755,13 @@ def run(engine):
 
         elif msg == MSG_CHAINING:
             code = stream.u32() & 0x7fffffff
-            stream.u32()
+            location = describe_location(stream.u32())
             stream.u8(); stream.u8(); stream.u8()
             desc = stream.u32()
             chain_size = stream.u8()
+            last_chaining_code = code
             yield {"type": "event", "event": "chaining", "card": card_brief(code),
-                   "chain_link": chain_size, "desc": desc}
+                   "chain_link": chain_size, "desc": desc, "location": location}
 
         elif msg == MSG_CHAINED:
             stream.u8()
@@ -746,6 +774,7 @@ def run(engine):
             stream.u8()
 
         elif msg == MSG_CHAIN_END:
+            engine.opponent_ai.clear_active()
             yield {"type": "event", "event": "chain_end"}
             yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
 
@@ -992,23 +1021,26 @@ def run(engine):
             player = stream.u8()
             desc = stream.u32()
             if player == 1:
-                # opponent decision -- always decline for now (see project memory
-                # on scripted opponent policy; a real per-puzzle policy can replace this)
-                engine.send_i(0)
+                # opponent decision -- no card code comes with this message, so
+                # there's no policy to look up directly; while an AI-chosen
+                # effect is actively resolving, answer any follow-up yes/no in
+                # the affirmative (keep the effect proceeding), otherwise
+                # decline as before.
+                engine.send_i(1 if engine.opponent_ai.active_effect_code is not None else 0)
                 pending = stream.u8()
                 if pending == MSG_RETRY:
                     pending = None
             if pending is None and player == 1:
                 def ask():
                     choice = yield from ask_yesno({"type": "prompt", "prompt": "yesno",
-                                                    "player": player, "desc": desc,
+                                                    "player": player, "desc": desc, "source": chain_source(),
                                                     "note": "auto-pass wasn't legal"})
                     engine.send_i(choice)
                 pending = yield from interact(engine, ask)
             elif player != 1:
                 def ask():
                     choice = yield from ask_yesno({"type": "prompt", "prompt": "yesno",
-                                                    "player": player, "desc": desc})
+                                                    "player": player, "desc": desc, "source": chain_source()})
                     engine.send_i(choice)
                 pending = yield from interact(engine, ask)
 
@@ -1018,7 +1050,11 @@ def run(engine):
             stream.u32()
             desc = stream.u32()
             if player == 1:
-                engine.send_i(0)
+                masked_code = code & 0x7fffffff
+                activate = engine.opponent_ai.should_activate(masked_code, desc, last_chaining_code)
+                if activate:
+                    engine.opponent_ai.note_activated(masked_code, desc)
+                engine.send_i(1 if activate else 0)
                 pending = stream.u8()
                 if pending == MSG_RETRY:
                     pending = None
@@ -1040,11 +1076,24 @@ def run(engine):
             player = stream.u8()
             n = stream.u8()
             options = [stream.u32() for _ in range(n)]
-            def ask():
-                choice = yield from ask_index({"type": "prompt", "prompt": "option", "player": player,
-                                                "options": options}, len(options))
-                engine.send_i(choice)
-            pending = yield from interact(engine, ask)
+            if player == 1:
+                engine.send_i(engine.opponent_ai.choose_option(len(options)))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    choice = yield from ask_index({"type": "prompt", "prompt": "option", "player": player,
+                                                    "options": options, "note": "auto-choice wasn't legal"},
+                                                   len(options))
+                    engine.send_i(choice)
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    choice = yield from ask_index({"type": "prompt", "prompt": "option", "player": player,
+                                                    "options": options}, len(options))
+                    engine.send_i(choice)
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_POSITION:
             player = stream.u8()
@@ -1053,12 +1102,26 @@ def run(engine):
             pos_names = {0x1: "faceup_attack", 0x2: "facedown_attack",
                          0x4: "faceup_defense", 0x8: "facedown_defense"}
             avail = [p for p in (0x1, 0x2, 0x4, 0x8) if positions & p]
-            def ask():
-                idx = yield from ask_index({"type": "prompt", "prompt": "position", "player": player,
-                                             "card": card_brief(code),
-                                             "options": [pos_names[p] for p in avail]}, len(avail))
-                engine.send_i(avail[idx])
-            pending = yield from interact(engine, ask)
+            if player == 1:
+                engine.send_i(engine.opponent_ai.choose_position(avail))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    idx = yield from ask_index({"type": "prompt", "prompt": "position", "player": player,
+                                                 "card": card_brief(code),
+                                                 "options": [pos_names[p] for p in avail],
+                                                 "note": "auto-choice wasn't legal"}, len(avail))
+                    engine.send_i(avail[idx])
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    idx = yield from ask_index({"type": "prompt", "prompt": "position", "player": player,
+                                                 "card": card_brief(code),
+                                                 "options": [pos_names[p] for p in avail]}, len(avail))
+                    engine.send_i(avail[idx])
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_IDLECMD:
             player = stream.u8()
@@ -1164,15 +1227,36 @@ def run(engine):
                     loc_info = describe_location(stream.u32())
                 items.append((code, loc_info))
 
-            def ask():
-                chosen = yield from ask_indices({"type": "prompt",
-                                                  "prompt": "tribute" if has_release_param else "card",
-                                                  "player": player, "min": min_sel, "max": max_sel,
-                                                  "items": [dict(card_brief(c), location=loc)
-                                                            for c, loc in items]},
-                                                 len(items), min_sel, max_sel)
+            if player == 1:
+                codes = [c & 0x7fffffff for c, _ in items]
+                chosen = engine.opponent_ai.choose_target(codes, min_sel, max_sel)
                 engine.send_b([len(chosen)] + chosen)
-            pending = yield from interact(engine, ask)
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    chosen = yield from ask_indices({"type": "prompt",
+                                                      "prompt": "tribute" if has_release_param else "card",
+                                                      "player": player, "min": min_sel, "max": max_sel,
+                                                      "items": [dict(card_brief(c), location=loc)
+                                                                for c, loc in items],
+                                                      "source": chain_source(),
+                                                      "note": "auto-choice wasn't legal"},
+                                                     len(items), min_sel, max_sel)
+                    engine.send_b([len(chosen)] + chosen)
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    chosen = yield from ask_indices({"type": "prompt",
+                                                      "prompt": "tribute" if has_release_param else "card",
+                                                      "player": player, "min": min_sel, "max": max_sel,
+                                                      "items": [dict(card_brief(c), location=loc)
+                                                                for c, loc in items],
+                                                      "source": chain_source()},
+                                                     len(items), min_sel, max_sel)
+                    engine.send_b([len(chosen)] + chosen)
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_CHAIN:
             player = stream.u8()
@@ -1214,13 +1298,12 @@ def run(engine):
                 if pending == MSG_RETRY:
                     pending = None
             elif player == 1:
-                # opponent decision -- for now always pass (see project memory on
-                # scripted opponent policy); a forced chain must pick one, so
-                # take the first forced option automatically.
-                if any_forced:
-                    choice = next(i for i, (forced, _, _) in enumerate(chains) if forced)
-                else:
-                    choice = -1
+                # opponent decision -- consult the puzzle's per-card
+                # eff_behaviour policy (see opponent_ai.py); a forced chain
+                # must pick one regardless of policy.
+                choice = engine.opponent_ai.choose_chain(chains, last_chaining_code)
+                if choice != -1:
+                    engine.opponent_ai.note_activated(chains[choice][1], chains[choice][2])
                 engine.send_i(choice)
                 pending = stream.u8()
                 if pending == MSG_RETRY:
@@ -1261,18 +1344,38 @@ def run(engine):
             count = count if count else 1
             options = decode_place_flag(flag, player)
 
-            def ask():
-                chosen = yield from ask_indices(
-                    {"type": "prompt", "prompt": "place", "player": player, "count": count,
-                     "options": [{"controller": p, "location_id": loc, "sequence": seq, "label": label}
-                                 for p, loc, seq, label in options]},
-                    len(options), count, count)
+            def pack_place(chosen):
                 out = []
                 for idx in chosen:
                     p, loc, seq, _label = options[idx]
                     out += [p, loc, seq]
-                engine.send_b(out)
-            pending = yield from interact(engine, ask)
+                return out
+
+            if player == 1:
+                chosen = engine.opponent_ai.choose_indices(len(options), count, count)
+                engine.send_b(pack_place(chosen))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    chosen = yield from ask_indices(
+                        {"type": "prompt", "prompt": "place", "player": player, "count": count,
+                         "options": [{"controller": p, "location_id": loc, "sequence": seq, "label": label}
+                                     for p, loc, seq, label in options],
+                         "note": "auto-choice wasn't legal"},
+                        len(options), count, count)
+                    engine.send_b(pack_place(chosen))
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    chosen = yield from ask_indices(
+                        {"type": "prompt", "prompt": "place", "player": player, "count": count,
+                         "options": [{"controller": p, "location_id": loc, "sequence": seq, "label": label}
+                                     for p, loc, seq, label in options]},
+                        len(options), count, count)
+                    engine.send_b(pack_place(chosen))
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_UNSELECT_CARD:
             player = stream.u8()
@@ -1295,27 +1398,53 @@ def run(engine):
             combined = select_items + unselect_items
             can_finish = bool(finishable or cancelable)
 
-            def ask():
-                payload = {"type": "prompt", "prompt": "select_unselect", "player": player,
-                           "min": min_sel, "max": max_sel, "can_finish": can_finish,
-                           "items": [dict(card_brief(c), location=loc, already_selected=i >= len(select_items))
-                                     for i, (c, loc) in enumerate(combined)]}
-                current = payload
-                while True:
-                    response = yield current
-                    if can_finish and (response or {}).get("finish"):
-                        # bvalue and ivalue share the same union in the engine's
-                        # response struct, and MSG_SELECT_UNSELECT_CARD's finish
-                        # check reads ivalue[0] == -1, so all 4 bytes of that
-                        # first int32 need to be 0xff, not just a single byte.
-                        engine.send_b([0xff, 0xff, 0xff, 0xff])
-                        return
-                    idx = (response or {}).get("choice")
-                    if isinstance(idx, int) and 0 <= idx < len(combined):
-                        engine.send_b([1, idx])
-                        return
-                    current = dict(payload, error="invalid choice")
-            pending = yield from interact(engine, ask)
+            if player == 1:
+                # bvalue and ivalue share the same union in the engine's
+                # response struct, and MSG_SELECT_UNSELECT_CARD's finish
+                # check reads ivalue[0] == -1, so all 4 bytes of that first
+                # int32 need to be 0xff, not just a single byte (see below).
+                idx = engine.opponent_ai.choose_unselect(len(combined), min_sel, can_finish, len(select_items))
+                engine.send_b([0xff, 0xff, 0xff, 0xff] if idx is None else [1, idx])
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    payload = {"type": "prompt", "prompt": "select_unselect", "player": player,
+                               "min": min_sel, "max": max_sel, "can_finish": can_finish,
+                               "note": "auto-choice wasn't legal", "source": chain_source(),
+                               "items": [dict(card_brief(c), location=loc, already_selected=i >= len(select_items))
+                                         for i, (c, loc) in enumerate(combined)]}
+                    current = payload
+                    while True:
+                        response = yield current
+                        if can_finish and (response or {}).get("finish"):
+                            engine.send_b([0xff, 0xff, 0xff, 0xff])
+                            return
+                        idx = (response or {}).get("choice")
+                        if isinstance(idx, int) and 0 <= idx < len(combined):
+                            engine.send_b([1, idx])
+                            return
+                        current = dict(payload, error="invalid choice")
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    payload = {"type": "prompt", "prompt": "select_unselect", "player": player,
+                               "min": min_sel, "max": max_sel, "can_finish": can_finish, "source": chain_source(),
+                               "items": [dict(card_brief(c), location=loc, already_selected=i >= len(select_items))
+                                         for i, (c, loc) in enumerate(combined)]}
+                    current = payload
+                    while True:
+                        response = yield current
+                        if can_finish and (response or {}).get("finish"):
+                            engine.send_b([0xff, 0xff, 0xff, 0xff])
+                            return
+                        idx = (response or {}).get("choice")
+                        if isinstance(idx, int) and 0 <= idx < len(combined):
+                            engine.send_b([1, idx])
+                            return
+                        current = dict(payload, error="invalid choice")
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_SUM:
             mode = stream.u8()  # 0 = exact match required, 1 = "at least" mode
@@ -1342,16 +1471,35 @@ def run(engine):
                             "location_id": loc, "sequence": seq, "position": 0}
                 opt_items.append((code, sum_param, loc_info))
 
-            def ask():
-                codes = [c for c, _, _ in opt_items]
-                lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
-                chosen = yield from ask_indices(
-                    {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
-                     "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
-                     "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
-                    len(codes), lo, hi)
+            if player == 1:
+                chosen = engine.opponent_ai.choose_sum(must_n, len(opt_items), min_sel, max_sel)
                 engine.send_b([len(chosen) + must_n] + chosen)
-            pending = yield from interact(engine, ask)
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    codes = [c for c, _, _ in opt_items]
+                    lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
+                    chosen = yield from ask_indices(
+                        {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
+                         "note": "auto-choice wasn't legal", "source": chain_source(),
+                         "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
+                         "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
+                        len(codes), lo, hi)
+                    engine.send_b([len(chosen) + must_n] + chosen)
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    codes = [c for c, _, _ in opt_items]
+                    lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
+                    chosen = yield from ask_indices(
+                        {"type": "prompt", "prompt": "sum", "player": player, "target": acc, "source": chain_source(),
+                         "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
+                         "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
+                        len(codes), lo, hi)
+                    engine.send_b([len(chosen) + must_n] + chosen)
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_COUNTER:
             player = stream.u8()
@@ -1367,17 +1515,36 @@ def run(engine):
                             "location_id": loc, "sequence": seq, "position": 0}
                 items.append((code, cur_count, loc_info))
 
-            def ask():
-                alloc = yield from ask_counter_alloc(
-                    {"type": "prompt", "prompt": "counter", "player": player, "counter_type": countertype,
-                     "total": count,
-                     "items": [dict(card_brief(c), current=cur, location=loc) for c, cur, loc in items]},
-                    items, count)
+            def pack_counter(alloc):
                 out = []
                 for a in alloc:
                     out += [a & 0xff, (a >> 8) & 0xff]
-                engine.send_b(out)
-            pending = yield from interact(engine, ask)
+                return out
+
+            if player == 1:
+                alloc = engine.opponent_ai.choose_counter([cur for _, cur, _ in items], count)
+                engine.send_b(pack_counter(alloc))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    alloc = yield from ask_counter_alloc(
+                        {"type": "prompt", "prompt": "counter", "player": player, "counter_type": countertype,
+                         "total": count, "note": "auto-choice wasn't legal",
+                         "items": [dict(card_brief(c), current=cur, location=loc) for c, cur, loc in items]},
+                        items, count)
+                    engine.send_b(pack_counter(alloc))
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    alloc = yield from ask_counter_alloc(
+                        {"type": "prompt", "prompt": "counter", "player": player, "counter_type": countertype,
+                         "total": count,
+                         "items": [dict(card_brief(c), current=cur, location=loc) for c, cur, loc in items]},
+                        items, count)
+                    engine.send_b(pack_counter(alloc))
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_SORT_CARD:
             player = stream.u8()
@@ -1392,23 +1559,56 @@ def run(engine):
             player = stream.u8()
             count = stream.u8()
             available = stream.u32()
-            def ask():
-                value = yield from ask_bitmask({"type": "prompt", "prompt": "announce_race", "player": player,
-                                                 "count": count, "available": available})
-                engine.send_i(value)
-            pending = yield from interact(engine, ask)
+            if player == 1:
+                engine.send_i(engine.opponent_ai.choose_bitmask(available))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    value = yield from ask_bitmask({"type": "prompt", "prompt": "announce_race", "player": player,
+                                                     "count": count, "available": available,
+                                                     "note": "auto-choice wasn't legal"})
+                    engine.send_i(value)
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    value = yield from ask_bitmask({"type": "prompt", "prompt": "announce_race", "player": player,
+                                                     "count": count, "available": available})
+                    engine.send_i(value)
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_ANNOUNCE_ATTRIB:
             player = stream.u8()
             count = stream.u8()
             available = stream.u32()
-            def ask():
-                value = yield from ask_bitmask({"type": "prompt", "prompt": "announce_attrib", "player": player,
-                                                 "count": count, "available": available})
-                engine.send_i(value)
-            pending = yield from interact(engine, ask)
+            if player == 1:
+                engine.send_i(engine.opponent_ai.choose_bitmask(available))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    value = yield from ask_bitmask({"type": "prompt", "prompt": "announce_attrib", "player": player,
+                                                     "count": count, "available": available,
+                                                     "note": "auto-choice wasn't legal"})
+                    engine.send_i(value)
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    value = yield from ask_bitmask({"type": "prompt", "prompt": "announce_attrib", "player": player,
+                                                     "count": count, "available": available})
+                    engine.send_i(value)
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_ANNOUNCE_CARD:
+            # No player==1 auto-answer here: unlike every other prompt type,
+            # the legal answer is a card name validated against an opcode
+            # filter tree the engine never enumerates for us, so there's no
+            # safe way to guess one that's guaranteed legal. If an opponent
+            # effect (none of Murakumo's/Futsu's do) ever needs this, it
+            # falls back to asking the human on the opponent's behalf rather
+            # than risking an unrecoverable illegal-answer retry loop.
             player = stream.u8()
             n = stream.u8()
             for _ in range(n):
@@ -1423,11 +1623,24 @@ def run(engine):
             player = stream.u8()
             n = stream.u8()
             options = [stream.u32() for _ in range(n)]
-            def ask():
-                choice = yield from ask_index({"type": "prompt", "prompt": "announce_number",
-                                                "player": player, "options": options}, len(options))
-                engine.send_i(choice)
-            pending = yield from interact(engine, ask)
+            if player == 1:
+                engine.send_i(engine.opponent_ai.choose_option(len(options)))
+                pending = stream.u8()
+                if pending == MSG_RETRY:
+                    pending = None
+            if pending is None and player == 1:
+                def ask():
+                    choice = yield from ask_index({"type": "prompt", "prompt": "announce_number",
+                                                    "player": player, "options": options,
+                                                    "note": "auto-choice wasn't legal"}, len(options))
+                    engine.send_i(choice)
+                pending = yield from interact(engine, ask)
+            elif player != 1:
+                def ask():
+                    choice = yield from ask_index({"type": "prompt", "prompt": "announce_number",
+                                                    "player": player, "options": options}, len(options))
+                    engine.send_i(choice)
+                pending = yield from interact(engine, ask)
 
         elif msg == MSG_ROCK_PAPER_SCISSORS:
             which_player = stream.u8()

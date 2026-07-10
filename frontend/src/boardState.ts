@@ -19,6 +19,10 @@ export const POS = {
 };
 
 const TYPE_LINK = 0x4000000;
+export const TYPE_FIELD = 0x80000;
+// Sequence 5 in the Spell/Trap zone row is the Field Zone -- separate from
+// the 5 regular Spell/Trap zones (0-4) and only ever legal for Field Spells.
+export const FIELD_ZONE_SEQ = 5;
 
 export interface ZoneCard extends CardRef {
   position?: number;
@@ -41,11 +45,68 @@ export interface BoardState {
   // their own, so this is the best available hint for "what is this asking
   // about" while one is showing.
   currentChainCard?: CardRef;
+  // Where that card is chaining from -- in particular `.controller` tells
+  // the UI whether the *opponent* just activated something (used to trigger
+  // the enlarge-on-activation cue and, when the priority toggle is off, to
+  // show a passive "Resolving X" notice instead of a real response prompt).
+  currentChainLocation?: Location;
+  // The chain link number the currently-chaining card occupies -- flashed on
+  // the enlarge cue so it's clear *which* link in the chain is resolving.
+  currentChainLink?: number;
+  // Append-only log of every opponent-controlled "chaining" event seen this
+  // duel, in order -- App.tsx's notice queue drains this (tracking how many
+  // it has already consumed) instead of watching currentChainLocation via a
+  // useEffect. Deriving the queue from a *reducer-appended* array rather
+  // than detecting a scalar's transitions is what makes it immune to
+  // multiple WS messages landing in the same React batch: applyEvent runs
+  // once per message regardless of batching, so every entry still lands
+  // here even when several "chaining" events are committed together (e.g.
+  // Futsu reborning Murakumo triggers Murakumo's own "if Special Summoned"
+  // effect on the same tick) -- a watcher keyed on the *current* scalar
+  // would only ever observe the last of those and silently drop the rest.
+  //
+  // Each entry also carries a full board *snapshot*, taken at the instant
+  // that card's own "chaining" event fired (its own currentChain* fields
+  // updated, but nothing about what its effect actually *does* applied
+  // yet). The server resolves the whole chain -- Futsu reborning Murakumo,
+  // Murakumo's own "if Special Summoned" trigger destroying the player's
+  // monsters -- in one uninterrupted burst of events with no prompt in
+  // between (nothing for a human to decide), so if the display just
+  // tracked live board state, all of that would land on screen before the
+  // 2s-per-notice reveal pacing ever caught up: monsters would appear
+  // destroyed before the Futsu/Murakumo notices even showed. Rendering
+  // from `current.board` (see App.tsx) while a notice is up freezes the
+  // visible board at that link's moment instead, so each notice's glow and
+  // popup reflect what the board actually looked like when it fired --
+  // the live board only becomes visible again once every notice has been
+  // dismissed.
+  chainNotices: { card: CardRef; chainLink?: number; board: BoardState }[];
   // The card currently being summoned, between "summoning"/"spsummoning"
   // and the "place" prompt that asks where -- shown alone in the hand row
   // while placement is in progress, whether it actually came from hand or
   // not (banished/GY/Extra Deck).
   placingCard?: CardRef;
+}
+
+// Best-effort, client-side guess at which of the player's own zones are
+// open, used only to let a Summon/Set action show its zone-glow (and a free
+// Cancel) *before* the choice is sent to the server -- the server is still
+// the sole authority once a guessed zone is actually clicked (see App.tsx's
+// pendingPlacement auto-confirm effect, which falls back to the real
+// "place" prompt if this guess turns out wrong, e.g. an unusual zone lock
+// this couldn't know about). Field Spells can *only* go in the Field Zone
+// (sequence 5), never the 5 regular Spell/Trap zones (0-4) -- guessing the
+// wrong set here is exactly what let a Field Spell show the ordinary
+// zones as selectable.
+export function guessOpenZones(board: BoardState, locationId: number, isFieldSpell: boolean): number[] {
+  if (isFieldSpell) {
+    return board.zones[zoneKey(0, LOC.SZONE, FIELD_ZONE_SEQ)] ? [] : [FIELD_ZONE_SEQ];
+  }
+  const open: number[] = [];
+  for (let sequence = 0; sequence < 5; sequence++) {
+    if (!board.zones[zoneKey(0, locationId, sequence)]) open.push(sequence);
+  }
+  return open;
 }
 
 export function zoneKey(controller: number, locationId: number, sequence: number): string {
@@ -65,6 +126,7 @@ export function createInitialBoard(): BoardState {
     banished: { 0: [], 1: [] },
     status: "playing",
     statusMessage: "",
+    chainNotices: [],
   };
 }
 
@@ -182,6 +244,7 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       b.deck = { 0: item.player_deck as CardRef[], 1: 0 };
       b.extra = { 0: item.player_extra as CardRef[], 1: 0 };
       b.banished = { 0: (item.player_banished ?? []) as CardRef[], 1: [] };
+      b.gy = { 0: [], 1: (item.opponent_graveyard ?? []) as CardRef[] };
       return b;
     }
 
@@ -275,11 +338,24 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
     case "spsummoned":
       return { ...board, placingCard: undefined };
 
-    case "chaining":
-      return { ...board, currentChainCard: item.card as CardRef };
+    case "chaining": {
+      const card = item.card as CardRef;
+      const location = item.location as Location;
+      const chainLink = item.chain_link as number;
+      // This card's own currentChain* fields are updated *before* the
+      // snapshot is taken, so the frozen board a notice shows already has
+      // this card glowing/flagged as the active link -- see the
+      // chainNotices field comment for why the snapshot exists at all.
+      const withChainState: BoardState = { ...board, currentChainCard: card,
+        currentChainLocation: location, currentChainLink: chainLink };
+      const chainNotices = location.controller === 1
+        ? [...board.chainNotices, { card, chainLink, board: withChainState }]
+        : board.chainNotices;
+      return { ...withChainState, chainNotices };
+    }
 
     case "chain_end":
-      return { ...board, currentChainCard: undefined };
+      return { ...board, currentChainCard: undefined, currentChainLocation: undefined, currentChainLink: undefined };
 
     case "win":
       return { ...board, status: "win", statusMessage: item.winner === 0 ? "You win!" : "Opponent wins." };

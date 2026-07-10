@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:\\Users\\Jacob\\OneDrive\\Desktop\\projects\\ygo-puzzle\\venv\\Scripts\\uvicorn.exe",
+      "runtimeArgs": ["server:app", "--reload", "--app-dir", "C:\\Users\\Jacob\\OneDrive\\Desktop\\projects\\ygo-puzzle\\backend"],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    }
+  ]
+}

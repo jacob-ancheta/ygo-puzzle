@@ -27,9 +27,15 @@ interface Props {
   /** Show the ATK/DEF line -- only used for cards on the field. Hand/pile/
    * search views show just the artwork. */
   showStats?: boolean;
+  /** Brief scale-up pulse -- used to flag a card whose effect the opponent
+   * just activated. Caller is responsible for clearing it after ~2s. */
+  enlarged?: boolean;
+  /** Chain link number to flash on top of the card while `enlarged` -- makes
+   * it obvious which link in the chain is currently resolving. */
+  chainLinkBadge?: number;
 }
 
-export default function CardTile({ card, position, selectable, selected, actionable, faceDownHint, onClick, small, showStats }: Props) {
+export default function CardTile({ card, position, selectable, selected, actionable, faceDownHint, onClick, small, showStats, enlarged, chainLinkBadge }: Props) {
   const [imageFailed, setImageFailed] = useState(false);
 
   if (!card) return <div className="card-slot empty" />;
@@ -51,6 +57,7 @@ export default function CardTile({ card, position, selectable, selected, actiona
     selected ? "selected" : "",
     actionable ? "actionable" : "",
     small ? "small" : "",
+    enlarged ? "enlarged" : "",
   ].filter(Boolean).join(" ");
 
   const kind = kindClass(card.type);
@@ -59,6 +66,9 @@ export default function CardTile({ card, position, selectable, selected, actiona
 
   return (
     <div className={classes} onClick={onClick} title={faceDown ? undefined : card.name}>
+      {enlarged && chainLinkBadge !== undefined && (
+        <span className="chain-link-badge">{chainLinkBadge}</span>
+      )}
       {faceDown ? (
         <div className="card-back" />
       ) : (

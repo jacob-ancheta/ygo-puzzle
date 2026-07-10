@@ -1,4 +1,4 @@
-import { useEffect, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { BoardState, ZoneCard } from "../boardState";
 import { LOC, POS, zoneKey } from "../boardState";
 import type { CardRef } from "../protocol";
@@ -7,12 +7,29 @@ import CardTile from "./CardTile";
 import ChainOverlay from "./ChainOverlay";
 import PileCell from "./PileCell";
 import PileViewOverlay from "./PileViewOverlay";
+import PlacementOverlay from "./PlacementOverlay";
 import SelectionOverlay from "./SelectionOverlay";
 
 export interface PileView { label: string; cards: ZoneCard[] }
 
+// A Summon/Set action whose target zone is still a client-side guess (see
+// boardState.ts's guessOpenZones) -- nothing has been sent to the server
+// for it yet, so App.tsx can offer a free Cancel while this is active.
+export interface PendingPlacementView {
+  card: CardRef;
+  label: string;
+  locationId: number;
+  openSequences: number[];
+}
+
 interface Props {
   board: BoardState;
+  // App.tsx substitutes null here (regardless of what the server actually
+  // sent) while an opponent-activation notice is still pending its own 2s
+  // glow-and-reveal or "Resolving X" acknowledgment -- so every
+  // prompt-driven affordance in this component (selectable/actionable
+  // cards, ChainOverlay, ...) naturally goes quiet for that whole window
+  // instead of layering on top of the notice.
   prompt: Record<string, unknown> | null;
   selection: number[];
   onCardMenu: (card: CardRef, options: ReturnType<typeof idleBattleOptionsFor>, x: number, y: number) => void;
@@ -36,6 +53,13 @@ interface Props {
   // this is whichever card's Summon/Set/Special Summon choice was just
   // committed (see App.tsx's committedCard).
   placingCardFallback: CardRef | null;
+  // See PendingPlacementView -- non-null only while the zone-glow for a
+  // Summon/Set is still a local guess, i.e. before the player has clicked
+  // one (once they do, App.tsx passes null here and the normal "place"
+  // prompt/placingCardFallback flow takes over for the real server round trip).
+  pendingPlacement: PendingPlacementView | null;
+  onGuessedZoneClick: (sequence: number) => void;
+  onCancelPlacement: () => void;
 }
 
 const MONSTER_SEQS = [0, 1, 2, 3, 4];
@@ -46,7 +70,7 @@ const EMZ_SEQS = [5, 6];
 // pendulum-zone comments for the same numbering).
 const FIELD_SEQ = 5;
 
-export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onChainChoice, onChainPass, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback }: Props) {
+export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onChainChoice, onChainPass, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback, pendingPlacement, onGuessedZoneClick, onCancelPlacement }: Props) {
   // Close the pile browser whenever a new prompt comes in -- most obviously
   // so it gets out of the way for a selection overlay that needs the same
   // spot, but also so it doesn't linger stale once the prompt resolves.
@@ -55,19 +79,63 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt]);
 
+  // Brief scale-up pulse (with the chain link number flashed on top) on
+  // whichever card the opponent just activated -- see App.css's
+  // .card-tile.enlarged / .chain-link-badge. Only the opponent's own
+  // activations get this treatment; the player already gets plenty of
+  // feedback (menus, confirm modals) for their own actions.
+  const [enlargedKey, setEnlargedKey] = useState<string | null>(null);
+  const [enlargedChainLink, setEnlargedChainLink] = useState<number | null>(null);
+  const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const loc = board.currentChainLocation;
+    if (!loc || loc.controller !== 1) return;
+    // Cancel-and-restart (rather than a per-effect cleanup keyed on this
+    // same dependency) so the glow reliably runs for its full 2s even if
+    // the chain fully resolves (chain_end) faster than that -- only a
+    // genuinely new opponent activation, handled here, should cut an
+    // in-flight glow short.
+    if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
+    const key = zoneKey(loc.controller, loc.location_id, loc.sequence);
+    setEnlargedKey(key);
+    setEnlargedChainLink(board.currentChainLink ?? null);
+    glowTimerRef.current = setTimeout(() => {
+      setEnlargedKey(null);
+      setEnlargedChainLink(null);
+      glowTimerRef.current = null;
+    }, 2000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board.currentChainLocation]);
+
+  // Only for real unmount, not every board update -- see the note above.
+  useEffect(() => {
+    return () => { if (glowTimerRef.current) clearTimeout(glowTimerRef.current); };
+  }, []);
+
+  function chainLinkBadgeFor(key: string): number | undefined {
+    return enlargedKey === key ? (enlargedChainLink ?? undefined) : undefined;
+  }
+
   function renderZone(controller: number, locationId: number, sequence: number, extraClass = "", emptyLabel?: string) {
     const loc: Loc = { controller, location_id: locationId, sequence };
     const card = board.zones[zoneKey(controller, locationId, sequence)];
 
     if (!card) {
       const zoneIdx = matchZoneIndex(prompt, loc);
-      const selectable = zoneIdx !== null;
-      const selected = selectable && selection.includes(zoneIdx as number);
+      const guessed = pendingPlacement !== null && controller === 0
+        && locationId === pendingPlacement.locationId
+        && pendingPlacement.openSequences.includes(sequence);
+      const selectable = zoneIdx !== null || guessed;
+      const selected = zoneIdx !== null && selection.includes(zoneIdx);
       return (
         <div
           key={sequence}
           className={`card-slot empty ${extraClass} ${selectable ? "selectable" : ""} ${selected ? "selected" : ""}`}
-          onClick={selectable ? () => onPlaceChoice(zoneIdx as number) : undefined}
+          onClick={
+            zoneIdx !== null ? () => onPlaceChoice(zoneIdx)
+              : guessed ? () => onGuessedZoneClick(sequence)
+                : undefined
+          }
         >
           {emptyLabel && <span className="pile-cell-label">{emptyLabel}</span>}
         </div>
@@ -87,6 +155,8 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         onCardDetail={onCardDetail}
         pendingFinalChoice={pendingFinalChoice}
         showStats
+        enlarged={enlargedKey === zoneKey(controller, locationId, sequence)}
+        chainLinkBadge={chainLinkBadgeFor(zoneKey(controller, locationId, sequence))}
       />
     );
   }
@@ -130,6 +200,8 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         onCardDetail={onCardDetail}
         pendingFinalChoice={pendingFinalChoice}
         showStats
+        enlarged={enlargedKey === zoneKey(controller as number, LOC.MZONE, sequence)}
+        chainLinkBadge={chainLinkBadgeFor(zoneKey(controller as number, LOC.MZONE, sequence))}
       />
     );
   }
@@ -301,13 +373,20 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
             onCardDetail={onCardDetail}
           />
         )}
+        {pendingPlacement && (
+          <PlacementOverlay
+            card={pendingPlacement.card}
+            label={pendingPlacement.label}
+            onCancel={onCancelPlacement}
+          />
+        )}
       </div>
     </div>
   );
 }
 
 function ZoneCardSlot({
-  card, loc, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onCardDetail, showStats, pendingFinalChoice,
+  card, loc, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onCardDetail, showStats, pendingFinalChoice, enlarged, chainLinkBadge,
 }: {
   card: ZoneCard;
   loc: Loc;
@@ -319,6 +398,8 @@ function ZoneCardSlot({
   onCardDetail: Props["onCardDetail"];
   showStats?: boolean;
   pendingFinalChoice?: number | null;
+  enlarged?: boolean;
+  chainLinkBadge?: number;
 }) {
   const idleBattleOptions = idleBattleOptionsFor(prompt, card.code);
   const actionable = idleBattleOptions.length > 0;
@@ -352,6 +433,8 @@ function ZoneCardSlot({
       selected={selected}
       onClick={handleClick}
       showStats={showStats}
+      enlarged={enlarged}
+      chainLinkBadge={chainLinkBadge}
     />
   );
 }

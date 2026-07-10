@@ -18,8 +18,10 @@ PUZZLE = {
     # Values: "special", "normal", or omit the key entirely to leave the
     # card's summon history untracked (matches raw engine default).
     "opponent_field": [
-        {"name": "Ame no Murakumo no Mitsurugi", "position": "attack", "summoned": "special"},
-        {"name": "Futsu no Mitama no Mitsurugi", "position": "defense", "summoned": "special"},
+        {"name": "Ame no Murakumo no Mitsurugi", "position": "attack", "summoned": "special",
+         "eff_behaviour": {"trigger": "first"}},
+        {"name": "Futsu no Mitama no Mitsurugi", "position": "defense", "summoned": "special",
+         "eff_behaviour": {"trigger": "always", "target": "random"}},
         {"name": "Mitsurugi no Mikoto, Saji", "position": "defense", "summoned": "special"},
         {"name": "Mitsurugi no Mikoto, Aramasa", "position": "defense", "summoned": "special"},
         {"name": "Mitsurugi no Mikoto, Kusanagi", "position": "defense", "summoned": "special"},
@@ -47,9 +49,9 @@ PUZZLE = {
         "Dharc the Dark Charmer, Gloomy",
         "Haggard Lizardose",
         "Linguriboh",
-        "Knightmare Cerberus",
         "Link Decoder",
-        "S:P Little Knight"
+        "S:P Little Knight",
+        "Sky Striker Ace - Azalea"
     ],
 
     "win_condition": "Reduce the opponent's LP to 0",

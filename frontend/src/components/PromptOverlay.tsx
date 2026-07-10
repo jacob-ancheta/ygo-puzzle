@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { CardRef } from "../protocol";
 import { POS } from "../boardState";
 import CardTile from "./CardTile";
+import { yesNoText } from "../effectText";
 
 interface Props {
   prompt: Record<string, unknown>;
@@ -20,9 +21,18 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
 
   if (kind === "yesno" || kind === "effectyn") {
     const card = (prompt.card as CardRef | undefined) ?? contextCard ?? undefined;
-    const title = kind === "effectyn"
-      ? `Activate effect of ${card?.name ?? "this card"}?`
-      : card ? `${card.name}: confirm?` : "Confirm";
+    // MSG_SELECT_YESNO/EFFECTYN never carry the actual effect text (the
+    // engine doesn't expose per-effect descriptions to Python) -- fall back
+    // to a curated per-(card, desc) override (see effectText.ts) before
+    // settling for the generic "{card}: confirm?" wording. Passing `desc`
+    // matters: a card with several distinct effects would otherwise get the
+    // same curated text no matter which of its effects is actually being
+    // asked about.
+    const curated = yesNoText(card?.code, prompt.desc as number | undefined);
+    const title = curated?.title
+      ?? (kind === "effectyn"
+        ? `Activate effect of ${card?.name ?? "this card"}?`
+        : card ? `${card.name}: confirm?` : "Confirm");
     return (
       <Modal title={title}>
         {card && (
@@ -30,10 +40,11 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
             <CardTile card={card} />
           </div>
         )}
+        {curated?.note && <p className="prompt-note">{curated.note}</p>}
         {prompt.note ? <p className="prompt-note">{prompt.note as string}</p> : null}
         <div className="modal-actions">
-          <button className="btn primary" onClick={() => respond({ choice: 1 })}>Yes</button>
-          <button className="btn" onClick={() => respond({ choice: 0 })}>No</button>
+          <button className="btn primary" onClick={() => respond({ choice: 1 })}>{curated?.yesLabel ?? "Yes"}</button>
+          <button className="btn" onClick={() => respond({ choice: 0 })}>{curated?.noLabel ?? "No"}</button>
         </div>
       </Modal>
     );
