@@ -8,18 +8,20 @@ interface Props {
   items: { option: IdleBattleOption; idx: number }[];
   onChoose: (idx: number) => void;
   onClose: () => void;
+  disableOutsideClose?: boolean;
 }
 
-export default function ActionMenu({ x, y, items, onChoose, onClose }: Props) {
+export default function ActionMenu({ x, y, items, onChoose, onClose, disableOutsideClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
+      if (disableOutsideClose) return;
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
+  }, [onClose, disableOutsideClose]);
 
   return (
     <div className="action-menu" ref={ref} style={{ left: x, top: y }}>

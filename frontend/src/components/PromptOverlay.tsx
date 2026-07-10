@@ -1,19 +1,26 @@
 import { useState, type ReactNode } from "react";
+import type { CardRef } from "../protocol";
 
 interface Props {
   prompt: Record<string, unknown>;
   respond: (response: Record<string, unknown>) => void;
+  // MSG_SELECT_YESNO carries no card reference of its own -- this is the
+  // card whose effect is currently resolving on the chain, used as a
+  // best-effort hint so a bare "yesno" prompt isn't just "Confirm?".
+  contextCard?: CardRef | null;
 }
 
 /** Modal popups for decisions that aren't "click the card on the board":
  * yes/no windows, chain windows, option pickers, position choice, RPS,
  * announcements, and counter allocation. */
-export default function PromptOverlay({ prompt, respond }: Props) {
+export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
   const kind = prompt.prompt as string;
 
   if (kind === "yesno" || kind === "effectyn") {
-    const card = prompt.card as { name: string } | undefined;
-    const title = kind === "effectyn" ? `Activate effect of ${card?.name}?` : "Confirm";
+    const card = (prompt.card as { name: string } | undefined) ?? contextCard ?? undefined;
+    const title = kind === "effectyn"
+      ? `Activate effect of ${card?.name ?? "this card"}?`
+      : card ? `${card.name}: confirm?` : "Confirm";
     return (
       <Modal title={title}>
         {prompt.note ? <p className="prompt-note">{prompt.note as string}</p> : null}

@@ -1,11 +1,14 @@
-import type { MouseEvent } from "react";
+import { useEffect, type MouseEvent } from "react";
 import type { BoardState, ZoneCard } from "../boardState";
 import { LOC, POS, zoneKey } from "../boardState";
 import type { CardRef } from "../protocol";
 import { hiddenZoneGroups, idleBattleOptionsFor, matchCardIndex, matchZoneIndex, type Loc } from "../interaction";
 import CardTile from "./CardTile";
-import PileStack from "./PileStack";
+import PileCell from "./PileCell";
+import PileViewOverlay from "./PileViewOverlay";
 import SelectionOverlay from "./SelectionOverlay";
+
+export interface PileView { label: string; cards: ZoneCard[] }
 
 interface Props {
   board: BoardState;
@@ -18,14 +21,38 @@ interface Props {
   onPhaseClick: (x: number, y: number) => void;
   canChangePhase: boolean;
   onCardDetail: (card: CardRef) => void;
+  pileView: PileView | null;
+  setPileView: (view: PileView | null) => void;
+  // Index (into the current select_unselect prompt's items) of a card held
+  // pending confirmation rather than already sent to the server -- see
+  // App.tsx's handleUnselectChoice. Forces that one card to glow as
+  // "selected" even though the server doesn't know about it yet.
+  pendingFinalChoice: number | null;
+  // Client-side fallback for board.placingCard -- Extra Deck summons never
+  // emit a "summoning"/"spsummoning" event before their "place" prompt, so
+  // this is whichever card's Summon/Set/Special Summon choice was just
+  // committed (see App.tsx's committedCard).
+  placingCardFallback: CardRef | null;
 }
 
 const MONSTER_SEQS = [0, 1, 2, 3, 4];
 const SPELL_SEQS = [0, 1, 2, 3, 4];
 const EMZ_SEQS = [5, 6];
+// Field Spell Zone -- SZONE sequence 5 (0-4 are the regular Spell/Trap
+// zones, 6/7 are the Pendulum zones; see duel_engine.py's LOCATION_SZONE
+// pendulum-zone comments for the same numbering).
+const FIELD_SEQ = 5;
 
-export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onPhaseClick, canChangePhase, onCardDetail }: Props) {
-  function renderZone(controller: number, locationId: number, sequence: number, extraClass = "") {
+export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback }: Props) {
+  // Close the pile browser whenever a new prompt comes in -- most obviously
+  // so it gets out of the way for a selection overlay that needs the same
+  // spot, but also so it doesn't linger stale once the prompt resolves.
+  useEffect(() => {
+    setPileView(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt]);
+
+  function renderZone(controller: number, locationId: number, sequence: number, extraClass = "", emptyLabel?: string) {
     const loc: Loc = { controller, location_id: locationId, sequence };
     const card = board.zones[zoneKey(controller, locationId, sequence)];
 
@@ -38,7 +65,9 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           key={sequence}
           className={`card-slot empty ${extraClass} ${selectable ? "selectable" : ""} ${selected ? "selected" : ""}`}
           onClick={selectable ? () => onPlaceChoice(zoneIdx as number) : undefined}
-        />
+        >
+          {emptyLabel && <span className="pile-cell-label">{emptyLabel}</span>}
+        </div>
       );
     }
 
@@ -53,6 +82,8 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         onSelectToggle={onSelectToggle}
         onUnselectChoice={onUnselectChoice}
         onCardDetail={onCardDetail}
+        pendingFinalChoice={pendingFinalChoice}
+        showStats
       />
     );
   }
@@ -94,36 +125,63 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         onSelectToggle={onSelectToggle}
         onUnselectChoice={onUnselectChoice}
         onCardDetail={onCardDetail}
+        pendingFinalChoice={pendingFinalChoice}
+        showStats
       />
     );
   }
 
-  function renderPiles(controller: 0 | 1) {
-    const deck = board.deck[controller];
-    const extra = board.extra[controller];
-    const deckCount = typeof deck === "number" ? deck : deck.length;
-    const deckCards = typeof deck === "number" ? undefined : deck;
-    const extraCount = typeof extra === "number" ? extra : extra.length;
-    const extraCards = typeof extra === "number" ? undefined : extra;
+  // Deck/Extra Deck are always face-down (hidden info); GY/Banished show
+  // whatever was most recently added to them, face-up, once populated --
+  // see PileCell.
+  function renderPileCell(kind: "deck" | "extra" | "gy" | "banished", controller: 0 | 1) {
+    const label = { deck: "DECK", extra: "ED", gy: "GY", banished: "BANISH" }[kind];
+
+    if (kind === "deck" || kind === "extra") {
+      const pile = kind === "deck" ? board.deck[controller] : board.extra[controller];
+      const count = typeof pile === "number" ? pile : pile.length;
+      const cards = typeof pile === "number" ? undefined : pile;
+      const openLabel = kind === "deck" ? "Deck" : "Extra Deck";
+      return (
+        <PileCell
+          key={`${kind}-${controller}`}
+          label={label}
+          count={count}
+          hidden
+          clickable={Boolean(cards && cards.length > 0)}
+          onOpen={cards ? () => setPileView({ label: openLabel, cards }) : undefined}
+        />
+      );
+    }
+
+    const list = kind === "gy" ? board.gy[controller] : board.banished[controller];
+    const openLabel = kind === "gy" ? "Graveyard" : "Banished Cards";
     return (
-      <div className="piles-cluster">
-        <PileStack label="Deck" shape="well" count={deckCount} cards={deckCards} onCardClick={onCardDetail} />
-        <PileStack label="Extra" shape="well" count={extraCount} cards={extraCards} onCardClick={onCardDetail} />
-        <PileStack label="GY" shape="well" count={board.gy[controller].length} cards={board.gy[controller]} onCardClick={onCardDetail} />
-        <PileStack label="Banish" shape="well" count={board.banished[controller].length} cards={board.banished[controller]} onCardClick={onCardDetail} />
-      </div>
+      <PileCell
+        key={`${kind}-${controller}`}
+        label={label}
+        count={list.length}
+        topCard={list[list.length - 1]}
+        clickable={list.length > 0}
+        onOpen={list.length > 0 ? () => setPileView({ label: openLabel, cards: list }) : undefined}
+        onCardDetail={onCardDetail}
+      />
     );
   }
 
   const handCards = board.hand[0];
   const overlayGroups = hiddenZoneGroups(prompt);
   const isUnselectPrompt = prompt?.prompt === "select_unselect";
+  // While choosing where to place a card (from hand, banished, GY, or the
+  // Extra Deck), show just that card alone in the hand row instead of the
+  // player's actual hand -- it's the only thing relevant to the decision.
+  const placingCard = board.placingCard ?? placingCardFallback ?? undefined;
+  const isPlacing = prompt?.prompt === "place" && Boolean(placingCard);
 
   return (
     <div className="board">
       <div className="board-main">
         <div className="piles-column">
-          {renderPiles(1)}
           <div className="lp-strip">
             <div className="lp-badge">
               <span className="lp-label">Opponent</span>
@@ -137,19 +195,28 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
               <span className="lp-value">{board.lp[0]}</span>
             </div>
           </div>
-          {renderPiles(0)}
         </div>
 
         <div className="field-center">
-          <div className="zone-row spell-row">{SPELL_SEQS.map((s) => renderZone(1, LOC.SZONE, s))}</div>
-          <div className="zone-row monster-row">{MONSTER_SEQS.map((s) => renderZone(1, LOC.MZONE, s))}</div>
+          <div className="zone-row spell-row">
+            {renderPileCell("deck", 1)}
+            {SPELL_SEQS.map((s) => renderZone(1, LOC.SZONE, s))}
+            {renderPileCell("extra", 1)}
+          </div>
+          <div className="zone-row monster-row">
+            {renderPileCell("gy", 1)}
+            {MONSTER_SEQS.map((s) => renderZone(1, LOC.MZONE, s))}
+            {renderZone(1, LOC.SZONE, FIELD_SEQ, "", "FIELD")}
+          </div>
 
           <div className="zone-row emz-row">
+            {renderPileCell("banished", 1)}
             <div className="card-slot invisible" />
             {renderEMZ(EMZ_SEQS[0])}
             <div className="card-slot invisible" />
             {renderEMZ(EMZ_SEQS[1])}
             <div className="card-slot invisible" />
+            {renderPileCell("banished", 0)}
           </div>
 
           <div className="center-divider">
@@ -163,35 +230,60 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
             </button>
           </div>
 
-          <div className="zone-row monster-row">{MONSTER_SEQS.map((s) => renderZone(0, LOC.MZONE, s))}</div>
-          <div className="zone-row spell-row">{SPELL_SEQS.map((s) => renderZone(0, LOC.SZONE, s))}</div>
+          <div className="zone-row monster-row">
+            {renderZone(0, LOC.SZONE, FIELD_SEQ, "", "FIELD")}
+            {MONSTER_SEQS.map((s) => renderZone(0, LOC.MZONE, s))}
+            {renderPileCell("gy", 0)}
+          </div>
+          <div className="zone-row spell-row">
+            {renderPileCell("extra", 0)}
+            {SPELL_SEQS.map((s) => renderZone(0, LOC.SZONE, s))}
+            {renderPileCell("deck", 0)}
+          </div>
         </div>
       </div>
 
       <div className="hand-area">
         <div className="hand-row">
-          {handCards.map((card, i) => {
-            const loc: Loc = { controller: 0, location_id: LOC.HAND, sequence: i };
-            return (
-              <ZoneCardSlot
-                key={`${card.code}-${i}`}
-                card={card}
-                loc={loc}
-                prompt={prompt}
-                selection={selection}
-                onCardMenu={onCardMenu}
-                onSelectToggle={onSelectToggle}
-                onUnselectChoice={onUnselectChoice}
-                onCardDetail={onCardDetail}
-              />
-            );
-          })}
+          {isPlacing ? (
+            <CardTile card={placingCard} />
+          ) : (
+            handCards.map((card, i) => {
+              const loc: Loc = { controller: 0, location_id: LOC.HAND, sequence: i };
+              return (
+                <ZoneCardSlot
+                  key={`${card.code}-${i}`}
+                  card={card}
+                  loc={loc}
+                  prompt={prompt}
+                  selection={selection}
+                  onCardMenu={onCardMenu}
+                  onSelectToggle={onSelectToggle}
+                  onUnselectChoice={onUnselectChoice}
+                  onCardDetail={onCardDetail}
+                  pendingFinalChoice={pendingFinalChoice}
+                />
+              );
+            })
+          )}
         </div>
+        {pileView && (
+          <PileViewOverlay
+            label={pileView.label}
+            cards={pileView.cards}
+            prompt={prompt}
+            onCardDetail={onCardDetail}
+            onCardMenu={onCardMenu}
+            onClose={() => setPileView(null)}
+          />
+        )}
         <SelectionOverlay
           groups={overlayGroups}
           selection={selection}
           isUnselectPrompt={isUnselectPrompt}
           onToggle={isUnselectPrompt ? onUnselectChoice : onSelectToggle}
+          onCardDetail={onCardDetail}
+          pendingFinalChoice={pendingFinalChoice}
         />
       </div>
     </div>
@@ -199,7 +291,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
 }
 
 function ZoneCardSlot({
-  card, loc, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onCardDetail,
+  card, loc, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onCardDetail, showStats, pendingFinalChoice,
 }: {
   card: ZoneCard;
   loc: Loc;
@@ -209,6 +301,8 @@ function ZoneCardSlot({
   onSelectToggle: Props["onSelectToggle"];
   onUnselectChoice: Props["onUnselectChoice"];
   onCardDetail: Props["onCardDetail"];
+  showStats?: boolean;
+  pendingFinalChoice?: number | null;
 }) {
   const idleBattleOptions = idleBattleOptionsFor(prompt, card.code);
   const actionable = idleBattleOptions.length > 0;
@@ -216,7 +310,7 @@ function ZoneCardSlot({
   const selectIdx = matchCardIndex(prompt, card.code, loc);
   const isUnselectPrompt = prompt?.prompt === "select_unselect";
   const alreadySelected = isUnselectPrompt && selectIdx !== null
-    ? Boolean((prompt!.items as { already_selected?: boolean }[])[selectIdx as number]?.already_selected)
+    ? Boolean((prompt!.items as { already_selected?: boolean }[])[selectIdx as number]?.already_selected) || selectIdx === pendingFinalChoice
     : false;
   const selected = isUnselectPrompt ? alreadySelected : (selectIdx !== null && selection.includes(selectIdx));
   const selectable = selectIdx !== null;
@@ -241,6 +335,7 @@ function ZoneCardSlot({
       selectable={selectable && !isUnselectPrompt}
       selected={selected}
       onClick={handleClick}
+      showStats={showStats}
     />
   );
 }

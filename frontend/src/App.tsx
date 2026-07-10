@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { useDuelSocket } from "./useDuelSocket";
-import Board from "./components/Board";
+import Board, { type PileView } from "./components/Board";
 import ActionMenu from "./components/ActionMenu";
 import PromptOverlay from "./components/PromptOverlay";
 import SelectionBar from "./components/SelectionBar";
@@ -17,6 +17,19 @@ const MULTI_SELECT_PROMPTS = new Set(["card", "tribute", "sum"]);
 // rather than in interaction.ts, which stays a generic categorizer.
 const HIDDEN_ACTIONS = new Set(["shuffle_hand"]);
 
+// Actions that skip straight to committing (Summon, Set, attack, ...) stay
+// as-is; these ones interrupt with a Yes/No confirm first, since choosing
+// them is otherwise irreversible and there's no other point of no return
+// (e.g. clicking to place a card) to catch a misclick.
+function needsConfirm(action: string): boolean {
+  return action === "Activate" || action === "activate" || action === "Special Summon";
+}
+
+function confirmLabel(action: string, cardName: string): string {
+  if (action === "Special Summon") return `Special Summon ${cardName}?`;
+  return `Activate effect of ${cardName}?`;
+}
+
 interface MenuState {
   card?: CardRef;
   options: { option: IdleBattleOption; idx: number }[];
@@ -24,16 +37,44 @@ interface MenuState {
   y: number;
 }
 
+interface ConfirmState {
+  label: string;
+  idx: number;
+  card?: CardRef;
+}
+
 export default function App() {
   const { board, prompt, connected, error, connect, respond } = useDuelSocket(WS_URL);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmState | null>(null);
   const [selection, setSelection] = useState<number[]>([]);
   const [detailCard, setDetailCard] = useState<CardRef | null>(null);
-  const [priorityOn, setPriorityOn] = useState(true);
+  const [priorityOn, setPriorityOn] = useState(false);
+  const [pileView, setPileView] = useState<PileView | null>(null);
+  const [pendingFinalChoice, setPendingFinalChoice] = useState<number | null>(null);
+  // Extra Deck (Link/Xyz/Synchro/Fusion) summons never emit a "summoning"/
+  // "spsummoning" event before their "place" prompt -- only effect-triggered
+  // special summons do -- so board.placingCard is unset for them. This is
+  // the client-side fallback: whichever card's Summon/Set/Special Summon
+  // choice was just committed, kept alive only for the "place" prompt that
+  // immediately follows it.
+  const [committedCard, setCommittedCard] = useState<CardRef | null>(null);
+  // Tracks the previous prompt's kind so committedCard can be cleared only
+  // once placement is actually done -- it needs to survive every intermediate
+  // prompt in between (e.g. a select_unselect for materials) on the way to
+  // the eventual "place" prompt, not just the very next one.
+  const prevPromptKindRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     setMenu(null);
+    setConfirmAction(null);
     setSelection([]);
+    setPendingFinalChoice(null);
+    const currentKind = prompt?.prompt as string | undefined;
+    if (prevPromptKindRef.current === "place" && currentKind !== "place") {
+      setCommittedCard(null);
+    }
+    prevPromptKindRef.current = currentKind;
   }, [prompt]);
 
   // Priority toggle OFF: whenever a quick-effect window opens (an optional
@@ -52,7 +93,13 @@ export default function App() {
 
   function handleCardMenu(card: CardRef, options: { option: IdleBattleOption; idx: number }[], x: number, y: number) {
     if (options.length === 1) {
-      respond({ choice: options[0].idx });
+      const { option, idx } = options[0];
+      if (needsConfirm(option.action)) {
+        setConfirmAction({ label: confirmLabel(option.action, card.name), idx, card });
+        return;
+      }
+      setCommittedCard(card);
+      respond({ choice: idx });
       return;
     }
     setMenu({ card, options, x, y });
@@ -63,8 +110,10 @@ export default function App() {
     setSelection((prev) => {
       if (prev.includes(idx)) return prev.filter((i) => i !== idx);
       const max = prompt.max as number;
-      if (prev.length >= max) return prev;
-      return [...prev, idx];
+      if (prev.length < max) return [...prev, idx];
+      // Already at the limit -- swap in the new pick instead of requiring
+      // the old one to be manually unselected first.
+      return [...prev.slice(1), idx];
     });
   }
 
@@ -83,11 +132,29 @@ export default function App() {
   }
 
   function handleUnselectChoice(idx: number) {
+    if (!prompt) return;
+    if (pendingFinalChoice === idx) {
+      // Clicking the held card again backs out of the pending state without
+      // ever telling the server about it.
+      setPendingFinalChoice(null);
+      return;
+    }
+    const items = (prompt.items as { already_selected?: boolean }[]) ?? [];
+    const isAdding = !items[idx]?.already_selected;
+    const remainingToAdd = items.filter((i) => !i.already_selected).length;
+    if (isAdding && remainingToAdd === 1 && Boolean(prompt.can_finish)) {
+      // This is the last available material -- hold off sending it so the
+      // player can still cancel instead of instantly consuming everything
+      // the moment the last candidate is picked.
+      setPendingFinalChoice(idx);
+      return;
+    }
     respond({ choice: idx });
   }
 
   const nonCard = (isBoardPrompt ? nonCardOptions(prompt) : []).filter(({ option }) => !HIDDEN_ACTIONS.has(option.action));
   const isMultiSelect = promptKind !== undefined && MULTI_SELECT_PROMPTS.has(promptKind);
+  const forWhom = board.currentChainCard ? ` for ${board.currentChainCard.name}` : "";
 
   function handlePhaseClick(x: number, y: number) {
     if (nonCard.length === 0) return;
@@ -114,7 +181,7 @@ export default function App() {
         onClick={() => setPriorityOn((v) => !v)}
         title="When OFF, priority is passed automatically whenever a quick effect could be activated"
       >
-        <span className="priority-toggle-label">Priority</span>
+        <span className="priority-toggle-label">Toggle</span>
         <span className="priority-toggle-state">{priorityOn ? "ON" : "OFF"}</span>
       </button>
 
@@ -145,13 +212,17 @@ export default function App() {
           onPhaseClick={handlePhaseClick}
           canChangePhase={nonCard.length > 0}
           onCardDetail={setDetailCard}
+          pileView={pileView}
+          setPileView={setPileView}
+          pendingFinalChoice={pendingFinalChoice}
+          placingCardFallback={committedCard}
         />
-        <CardDetailPanel card={detailCard} prompt={prompt} onAction={(idx) => respond({ choice: idx })} />
+        <CardDetailPanel card={detailCard} />
       </main>
 
-      {isMultiSelect && prompt && (
+      {isMultiSelect && prompt && !pileView && (
         <SelectionBar
-          label={promptKind === "sum" ? `Cards summing to ${prompt.target}` : `Select ${promptKind}`}
+          label={promptKind === "sum" ? `Cards summing to ${prompt.target}` : `Select ${promptKind}${forWhom}`}
           count={selection.length}
           min={prompt.min as number}
           max={prompt.max as number}
@@ -160,16 +231,20 @@ export default function App() {
         />
       )}
 
-      {promptKind === "select_unselect" && prompt && (
+      {promptKind === "select_unselect" && prompt && !pileView && (
         <SelectionBar
-          label="Select/unselect cards"
-          count={(prompt.items as { already_selected?: boolean }[]).filter((i) => i.already_selected).length}
+          label={`Select/unselect cards${forWhom}`}
+          count={
+            (prompt.items as { already_selected?: boolean }[]).filter((i) => i.already_selected).length +
+            (pendingFinalChoice !== null ? 1 : 0)
+          }
           min={prompt.min as number}
           max={prompt.max as number}
-          canConfirm={false}
-          onConfirm={() => {}}
+          canConfirm={pendingFinalChoice !== null}
+          onConfirm={() => { respond({ choice: pendingFinalChoice }); setPendingFinalChoice(null); }}
           canFinish={Boolean(prompt.can_finish)}
-          onFinish={() => respond({ finish: true })}
+          finishLabel={pendingFinalChoice !== null ? "Cancel" : "Finish"}
+          onFinish={() => { respond({ finish: true }); setPendingFinalChoice(null); }}
         />
       )}
 
@@ -178,12 +253,48 @@ export default function App() {
           x={menu.x}
           y={menu.y}
           items={menu.options}
-          onChoose={(idx) => { respond({ choice: idx }); setMenu(null); }}
+          disableOutsideClose={confirmAction !== null}
+          onChoose={(idx) => {
+            const chosen = menu.options.find((o) => o.idx === idx);
+            if (chosen && needsConfirm(chosen.option.action)) {
+              setConfirmAction({
+                label: confirmLabel(chosen.option.action, chosen.option.card?.name ?? "this card"),
+                idx,
+                card: chosen.option.card ?? menu.card,
+              });
+              return;
+            }
+            if (chosen?.option.card ?? menu.card) setCommittedCard(chosen?.option.card ?? menu.card ?? null);
+            respond({ choice: idx });
+            setMenu(null);
+          }}
           onClose={() => setMenu(null)}
         />
       )}
 
-      {isModalPrompt && prompt && <PromptOverlay prompt={prompt} respond={respond} />}
+      {confirmAction && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>{confirmAction.label}</h3>
+            <div className="modal-actions">
+              <button
+                className="btn primary"
+                onClick={() => {
+                  if (confirmAction.card) setCommittedCard(confirmAction.card);
+                  respond({ choice: confirmAction.idx });
+                  setConfirmAction(null);
+                  setMenu(null);
+                }}
+              >
+                Yes
+              </button>
+              <button className="btn" onClick={() => setConfirmAction(null)}>No</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isModalPrompt && prompt && <PromptOverlay prompt={prompt} respond={respond} contextCard={board.currentChainCard} />}
     </div>
   );
 }

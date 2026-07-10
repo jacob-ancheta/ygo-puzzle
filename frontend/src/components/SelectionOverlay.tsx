@@ -17,9 +17,11 @@ interface Props {
   selection: number[];
   isUnselectPrompt: boolean;
   onToggle: (idx: number) => void;
+  onCardDetail: (card: CardRef) => void;
+  pendingFinalChoice?: number | null;
 }
 
-export default function SelectionOverlay({ groups, selection, isUnselectPrompt, onToggle }: Props) {
+export default function SelectionOverlay({ groups, selection, isUnselectPrompt, onToggle, onCardDetail, pendingFinalChoice }: Props) {
   if (groups.length === 0) return null;
 
   return (
@@ -32,14 +34,16 @@ export default function SelectionOverlay({ groups, selection, isUnselectPrompt, 
           </div>
           <div className="selection-overlay-row">
             {group.entries.map(({ idx, item }) => {
-              const selected = isUnselectPrompt ? Boolean(item.already_selected) : selection.includes(idx);
+              const selected = isUnselectPrompt
+                ? Boolean(item.already_selected) || idx === pendingFinalChoice
+                : selection.includes(idx);
               return (
                 <CardTile
                   key={`${item.code}-${idx}`}
                   card={item as CardRef}
                   selectable
                   selected={selected}
-                  onClick={() => onToggle(idx)}
+                  onClick={() => { onCardDetail(item as CardRef); onToggle(idx); }}
                 />
               );
             })}

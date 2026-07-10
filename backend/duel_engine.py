@@ -49,6 +49,8 @@ class PuzzleLoadError(Exception):
 def resolve_all(puzzle):
     names = [e["name"] for e in puzzle["opponent_field"]]
     names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
+    names += [e["name"] for e in puzzle.get("player_field", [])]
+    names += puzzle.get("player_banished", [])
     resolved, failed = {}, []
     for name in names:
         card = get_card_by_name(name)
@@ -183,9 +185,15 @@ lib.set_message_handler(_message_handler_cb)
 lib.create_duel.restype = ctypes.c_ssize_t
 lib.create_duel.argtypes = [ctypes.c_uint32]
 lib.preload_script.restype = ctypes.c_int32
+lib.query_field_card.restype = ctypes.c_int32
+lib.query_field_card.argtypes = [ctypes.c_ssize_t, ctypes.c_uint8, ctypes.c_uint8, ctypes.c_uint32,
+                                  ctypes.POINTER(ctypes.c_ubyte), ctypes.c_int32]
 
 LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE, LOCATION_EXTRA = 0x01, 0x02, 0x04, 0x08, 0x40
+LOCATION_REMOVED = 0x20
 POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE = 0x1, 0x4
+QUERY_ATTACK, QUERY_DEFENSE = 0x100, 0x200
+TYPE_LINK = 0x4000000
 DUEL_ATTACK_FIRST_TURN = 0x02  # puzzles are constructed positions, not turn 1 of a real match --
                                 # without this, the engine correctly (but unhelpfully) blocks
                                 # Battle Phase entirely on the very first turn.
@@ -272,6 +280,15 @@ class DuelEngine:
             self._place(self.resolved[name]["code"], 0, LOCATION_DECK, i, POS_FACEUP_ATTACK)
         for i, name in enumerate(puzzle["player_extra"]):
             self._place(self.resolved[name]["code"], 0, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)
+        # Optional, symmetric with opponent_field -- lets a puzzle start
+        # mid-combo with the player's own monsters already on the field or
+        # already banished, instead of only ever starting from hand/deck.
+        for i, entry in enumerate(puzzle.get("player_field", [])):
+            card = self.resolved[entry["name"]]
+            pos = POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
+            self._place(card["code"], 0, LOCATION_MZONE, i, pos)
+        for i, name in enumerate(puzzle.get("player_banished", [])):
+            self._place(self.resolved[name]["code"], 0, LOCATION_REMOVED, i, POS_FACEUP_ATTACK)
 
         lib.start_duel(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(DUEL_ATTACK_FIRST_TURN))
 
@@ -328,6 +345,11 @@ def initial_board_state(engine):
         "player_hand": [brief(name) for name in puzzle["player_hand"]],
         "player_deck": [brief(name) for name in puzzle["player_deck"]],
         "player_extra": [brief(name) for name in puzzle["player_extra"]],
+        "player_field": [
+            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            for i, entry in enumerate(puzzle.get("player_field", []))
+        ],
+        "player_banished": [brief(name) for name in puzzle.get("player_banished", [])],
     }
 
 
@@ -470,6 +492,35 @@ def card_brief(code):
         brief["defense"] = info["defense"]
         brief["level"] = info["level"]
     return brief
+
+
+def query_live_stats(engine):
+    """Snapshot the current (post-effect) ATK/DEF of every monster in both
+    Monster Zones. card_brief() only has the printed/base stats from
+    cards.db, which don't reflect in-duel modifications -- stat-boost
+    effects, "double this card's ATK" effects, Link Monster continuous
+    effects on the opponent's stats, etc. -- so the client needs this to
+    display those correctly."""
+    results = []
+    for controller in (0, 1):
+        buf = (ctypes.c_ubyte * 4096)()
+        n = lib.query_field_card(ctypes.c_ssize_t(engine.pduel), ctypes.c_uint8(controller),
+                                  ctypes.c_uint8(LOCATION_MZONE), ctypes.c_uint32(QUERY_ATTACK | QUERY_DEFENSE),
+                                  buf, ctypes.c_int32(0))
+        offset = 0
+        sequence = 0
+        while offset < n:
+            length = int.from_bytes(bytes(buf[offset:offset + 4]), "little")
+            if length <= 4:
+                offset += 4
+                sequence += 1
+                continue
+            attack = int.from_bytes(bytes(buf[offset + 8:offset + 12]), "little", signed=True)
+            defense = int.from_bytes(bytes(buf[offset + 12:offset + 16]), "little", signed=True)
+            results.append({"controller": controller, "sequence": sequence, "attack": attack, "defense": defense})
+            offset += length
+            sequence += 1
+    return results
 
 
 def decode_place_flag(flag, playerid):
@@ -637,6 +688,7 @@ def run(engine):
 
         elif msg == MSG_SUMMONED:
             yield {"type": "event", "event": "summoned"}
+            yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
 
         elif msg == MSG_SPSUMMONING:
             code = stream.u32() & 0x7fffffff
@@ -645,6 +697,7 @@ def run(engine):
 
         elif msg == MSG_SPSUMMONED:
             yield {"type": "event", "event": "spsummoned"}
+            yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
 
         elif msg == MSG_FLIPSUMMONING:
             code = stream.u32() & 0x7fffffff
@@ -675,6 +728,7 @@ def run(engine):
 
         elif msg == MSG_CHAIN_END:
             yield {"type": "event", "event": "chain_end"}
+            yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
 
         elif msg == MSG_CHAIN_NEGATED:
             n = stream.u8()
@@ -1208,7 +1262,11 @@ def run(engine):
                 while True:
                     response = yield current
                     if can_finish and (response or {}).get("finish"):
-                        engine.send_i(-1)
+                        # bvalue and ivalue share the same union in the engine's
+                        # response struct, and MSG_SELECT_UNSELECT_CARD's finish
+                        # check reads ivalue[0] == -1, so all 4 bytes of that
+                        # first int32 need to be 0xff, not just a single byte.
+                        engine.send_b([0xff, 0xff, 0xff, 0xff])
                         return
                     idx = (response or {}).get("choice")
                     if isinstance(idx, int) and 0 <= idx < len(combined):

@@ -24,15 +24,22 @@ interface Props {
   faceDownHint?: boolean;
   onClick?: (e: MouseEvent) => void;
   small?: boolean;
+  /** Show the ATK/DEF line -- only used for cards on the field. Hand/pile/
+   * search views show just the artwork. */
+  showStats?: boolean;
 }
 
-export default function CardTile({ card, position, selectable, selected, actionable, faceDownHint, onClick, small }: Props) {
+export default function CardTile({ card, position, selectable, selected, actionable, faceDownHint, onClick, small, showStats }: Props) {
   const [imageFailed, setImageFailed] = useState(false);
 
   if (!card) return <div className="card-slot empty" />;
 
   const faceDown = faceDownHint || (position !== undefined && (position & POS.FACEDOWN_ATTACK || position & POS.FACEDOWN_DEFENSE));
-  const defense = position !== undefined && (position & POS.FACEUP_DEFENSE || position & POS.FACEDOWN_DEFENSE);
+  // Only monsters have an attack/defense orientation -- a set Spell/Trap
+  // still carries the FACEDOWN_DEFENSE bit from the engine, but it should
+  // never be rotated like a set monster.
+  const isMonster = Boolean(card.type !== undefined && card.type & TYPE_MONSTER);
+  const defense = isMonster && position !== undefined && (position & POS.FACEUP_DEFENSE || position & POS.FACEDOWN_DEFENSE);
 
   const classes = [
     "card-slot",
@@ -56,7 +63,6 @@ export default function CardTile({ card, position, selectable, selected, actiona
         <div className="card-back" />
       ) : (
         <div className="card-face">
-          <div className="card-name-label">{card.name}</div>
           <div className="card-art">
             {badge && <span className="type-badge">{badge}</span>}
             {art && !imageFailed ? (
@@ -64,7 +70,7 @@ export default function CardTile({ card, position, selectable, selected, actiona
             ) : (
               <div className="card-art-fallback">{card.name}</div>
             )}
-            {card.attack !== undefined && (
+            {showStats && card.attack !== undefined && (
               <div className="card-stats">
                 <span>{card.attack}</span>
                 {card.defense !== undefined && card.defense >= 0 ? <span>/ {card.defense}</span> : null}

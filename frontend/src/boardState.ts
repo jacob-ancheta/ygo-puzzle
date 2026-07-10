@@ -18,6 +18,8 @@ export const POS = {
   FACEDOWN_DEFENSE: 0x8,
 };
 
+const TYPE_LINK = 0x4000000;
+
 export interface ZoneCard extends CardRef {
   position?: number;
 }
@@ -34,6 +36,16 @@ export interface BoardState {
   banished: { 0: ZoneCard[]; 1: ZoneCard[] };
   status: "playing" | "win" | "loss" | "ended";
   statusMessage: string;
+  // The card whose effect is currently resolving on the chain, if any --
+  // generic yes/no prompts (MSG_SELECT_YESNO) carry no card reference of
+  // their own, so this is the best available hint for "what is this asking
+  // about" while one is showing.
+  currentChainCard?: CardRef;
+  // The card currently being summoned, between "summoning"/"spsummoning"
+  // and the "place" prompt that asks where -- shown alone in the hand row
+  // while placement is in progress, whether it actually came from hand or
+  // not (banished/GY/Extra Deck).
+  placingCard?: CardRef;
 }
 
 export function zoneKey(controller: number, locationId: number, sequence: number): string {
@@ -151,9 +163,16 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       const lp = item.lp as { player: number; opponent: number };
       b.lp = { 0: lp.player, 1: lp.opponent };
       const opponentField = item.opponent_field as { card: CardRef; zone: number; position: string }[];
+      const playerField = (item.player_field ?? []) as { card: CardRef; zone: number; position: string }[];
       const zones: Record<string, ZoneCard> = {};
       for (const entry of opponentField) {
         zones[zoneKey(1, LOC.MZONE, entry.zone)] = {
+          ...entry.card,
+          position: entry.position === "attack" ? POS.FACEUP_ATTACK : POS.FACEUP_DEFENSE,
+        };
+      }
+      for (const entry of playerField) {
+        zones[zoneKey(0, LOC.MZONE, entry.zone)] = {
           ...entry.card,
           position: entry.position === "attack" ? POS.FACEUP_ATTACK : POS.FACEUP_DEFENSE,
         };
@@ -162,6 +181,7 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       b.hand = { 0: item.player_hand as CardRef[], 1: [] };
       b.deck = { 0: item.player_deck as CardRef[], 1: 0 };
       b.extra = { 0: item.player_extra as CardRef[], 1: 0 };
+      b.banished = { 0: (item.player_banished ?? []) as CardRef[], 1: [] };
       return b;
     }
 
@@ -174,6 +194,25 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
     case "lp_update": {
       const player = item.player as number;
       return { ...board, lp: { ...board.lp, [player]: item.lp as number } as typeof board.lp };
+    }
+
+    // The engine reports these as deltas rather than always following up
+    // with an authoritative "lp_update" -- apply the delta ourselves. If an
+    // "lp_update" does arrive later for the same change, it just overwrites
+    // with the same (already correct) total, so this is safe either way.
+    case "damage":
+    case "pay_lpcost": {
+      const player = item.player as number;
+      const amount = (item.amount ?? item.cost) as number;
+      const current = board.lp[player as 0 | 1];
+      return { ...board, lp: { ...board.lp, [player]: Math.max(0, current - amount) } as typeof board.lp };
+    }
+
+    case "recover": {
+      const player = item.player as number;
+      const amount = item.amount as number;
+      const current = board.lp[player as 0 | 1];
+      return { ...board, lp: { ...board.lp, [player]: current + amount } as typeof board.lp };
     }
 
     case "move": {
@@ -211,6 +250,36 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       }
       return board;
     }
+
+    case "stats_update": {
+      const updates = item.cards as { controller: number; sequence: number; attack: number; defense: number }[];
+      const zones = { ...board.zones };
+      for (const u of updates) {
+        const key = zoneKey(u.controller, LOC.MZONE, u.sequence);
+        const existing = zones[key];
+        if (!existing) continue;
+        // Link Monsters have no DEF -- get_atk_def() always reports 0 for
+        // them, which would otherwise clobber the "hide DEF" convention
+        // (existing.defense left undefined/-1) used elsewhere for display.
+        const isLink = existing.type !== undefined && (existing.type & TYPE_LINK) !== 0;
+        zones[key] = { ...existing, attack: u.attack, ...(isLink ? {} : { defense: u.defense }) };
+      }
+      return { ...board, zones };
+    }
+
+    case "summoning":
+    case "spsummoning":
+      return { ...board, placingCard: item.card as CardRef };
+
+    case "summoned":
+    case "spsummoned":
+      return { ...board, placingCard: undefined };
+
+    case "chaining":
+      return { ...board, currentChainCard: item.card as CardRef };
+
+    case "chain_end":
+      return { ...board, currentChainCard: undefined };
 
     case "win":
       return { ...board, status: "win", statusMessage: item.winner === 0 ? "You win!" : "Opponent wins." };
