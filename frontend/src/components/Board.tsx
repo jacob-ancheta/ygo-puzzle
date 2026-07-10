@@ -4,6 +4,7 @@ import { LOC, POS, zoneKey } from "../boardState";
 import type { CardRef } from "../protocol";
 import { hiddenZoneGroups, idleBattleOptionsFor, matchCardIndex, matchZoneIndex, type Loc } from "../interaction";
 import CardTile from "./CardTile";
+import ChainOverlay from "./ChainOverlay";
 import PileCell from "./PileCell";
 import PileViewOverlay from "./PileViewOverlay";
 import SelectionOverlay from "./SelectionOverlay";
@@ -18,6 +19,8 @@ interface Props {
   onSelectToggle: (idx: number) => void;
   onUnselectChoice: (idx: number) => void;
   onPlaceChoice: (idx: number) => void;
+  onChainChoice: (idx: number) => void;
+  onChainPass: () => void;
   onPhaseClick: (x: number, y: number) => void;
   canChangePhase: boolean;
   onCardDetail: (card: CardRef) => void;
@@ -43,7 +46,7 @@ const EMZ_SEQS = [5, 6];
 // pendulum-zone comments for the same numbering).
 const FIELD_SEQ = 5;
 
-export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback }: Props) {
+export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onChainChoice, onChainPass, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback }: Props) {
   // Close the pile browser whenever a new prompt comes in -- most obviously
   // so it gets out of the way for a selection overlay that needs the same
   // spot, but also so it doesn't linger stale once the prompt resolves.
@@ -172,6 +175,10 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   const handCards = board.hand[0];
   const overlayGroups = hiddenZoneGroups(prompt);
   const isUnselectPrompt = prompt?.prompt === "select_unselect";
+  const isChainPrompt = prompt?.prompt === "chain";
+  const chainOptions = isChainPrompt
+    ? (prompt!.options as { card: CardRef; desc: number; forced: boolean }[])
+    : [];
   // While choosing where to place a card (from hand, banished, GY, or the
   // Extra Deck), show just that card alone in the hand row instead of the
   // player's actual hand -- it's the only thing relevant to the decision.
@@ -285,6 +292,15 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           onCardDetail={onCardDetail}
           pendingFinalChoice={pendingFinalChoice}
         />
+        {isChainPrompt && (
+          <ChainOverlay
+            options={chainOptions}
+            canPass={Boolean(prompt!.can_pass)}
+            onChoose={onChainChoice}
+            onPass={onChainPass}
+            onCardDetail={onCardDetail}
+          />
+        )}
       </div>
     </div>
   );
@@ -332,7 +348,7 @@ function ZoneCardSlot({
       card={card}
       position={card.position}
       actionable={actionable}
-      selectable={selectable && !isUnselectPrompt}
+      selectable={selectable}
       selected={selected}
       onClick={handleClick}
       showStats={showStats}

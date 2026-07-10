@@ -297,6 +297,13 @@
   gap: 8px;
 }
 
+/* The chain overlay's Pass button sits alongside the card row -- center it
+   rather than letting align-items:stretch (above) pull it to full height. */
+.chain-pass-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+
 .selection-overlay-group + .selection-overlay-group {
   border-left: 1px solid var(--ink-700);
   padding-left: 28px;

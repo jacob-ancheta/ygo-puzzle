@@ -32,26 +32,6 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
     );
   }
 
-  if (kind === "chain") {
-    const options = prompt.options as { card: { name: string }; desc: number; forced: boolean }[];
-    return (
-      <Modal title="Activate an effect?">
-        <div className="modal-list">
-          {options.map((opt, i) => (
-            <button key={i} className="btn list-item" onClick={() => respond({ choice: i })}>
-              {opt.card.name}{opt.forced ? " (forced)" : ""}
-            </button>
-          ))}
-        </div>
-        {prompt.can_pass ? (
-          <div className="modal-actions">
-            <button className="btn" onClick={() => respond({ pass: true })}>Pass</button>
-          </div>
-        ) : null}
-      </Modal>
-    );
-  }
-
   if (kind === "option") {
     const options = prompt.options as number[];
     return (

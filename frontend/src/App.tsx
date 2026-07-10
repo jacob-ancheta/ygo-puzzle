@@ -10,7 +10,7 @@ import { nonCardOptions } from "./interaction";
 import { WS_URL } from "./config";
 import type { CardRef, IdleBattleOption } from "./protocol";
 
-const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place"]);
+const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place", "chain"]);
 const MULTI_SELECT_PROMPTS = new Set(["card", "tribute", "sum"]);
 // "shuffle_hand" is a real idlecmd option the engine can offer, but this
 // puzzle never needs it and it just clutters the phase menu -- drop it here
@@ -79,10 +79,15 @@ export default function App() {
 
   // Priority toggle OFF: whenever a quick-effect window opens (an optional
   // "chain" prompt -- activate something now, or pass), skip the prompt and
-  // pass immediately instead of asking.
+  // pass immediately instead of asking. But never auto-pass when spe_count
+  // is nonzero -- those leading options are effects that just genuinely
+  // triggered (e.g. "if this card is sent to the GY..."), not incidental
+  // quick-effect availability, and silently passing them means they never
+  // happen at all rather than just skipping a response window.
   useEffect(() => {
     if (priorityOn) return;
-    if (prompt?.prompt === "chain" && prompt.can_pass === true && prompt.player === 0) {
+    if (prompt?.prompt === "chain" && prompt.can_pass === true && prompt.player === 0
+        && !(prompt.spe_count as number)) {
       respond({ pass: true });
     }
   }, [prompt, priorityOn, respond]);
@@ -129,6 +134,14 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  function handleChainChoice(idx: number) {
+    respond({ choice: idx });
+  }
+
+  function handleChainPass() {
+    respond({ pass: true });
   }
 
   function handleUnselectChoice(idx: number) {
@@ -209,6 +222,8 @@ export default function App() {
           onSelectToggle={handleSelectToggle}
           onUnselectChoice={handleUnselectChoice}
           onPlaceChoice={handlePlaceChoice}
+          onChainChoice={handleChainChoice}
+          onChainPass={handleChainPass}
           onPhaseClick={handlePhaseClick}
           canChangePhase={nonCard.length > 0}
           onCardDetail={setDetailCard}
