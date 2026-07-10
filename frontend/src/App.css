@@ -349,6 +349,12 @@
 .card-slot.empty {
   border: 1px dashed var(--ink-600);
   background: rgba(255, 255, 255, 0.015);
+  /* Centers an empty-state label (GY/ED/DECK/FIELD/BANISH) when one is
+     present -- harmless no-op for the many empty slots that have no label
+     child at all (plain monster/spell zones, EMZ). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .card-tile {
@@ -485,16 +491,20 @@
   transform: translateY(-3px);
 }
 
-/* ---------- pile cells (Deck/Extra/GY/Banished/Field, in the field grid) ---------- */
-
-/* Unoccupied -- reuses the plain .card-slot.empty look, just with a label
-   so an otherwise-blank corner slot still reads as "this is the GY". */
-.pile-cell.empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* Defense-position tiles are already rotated 90deg -- without re-stating
+   that rotation here, the hover rule above would replace it outright,
+   visibly spinning the card back to upright for the lift. Translate is
+   listed first (outermost) so the lift stays screen-space "up" instead of
+   getting rotated into a sideways shift. */
+.card-tile.defense:hover.actionable, .card-tile.defense:hover.selectable {
+  transform: translateY(-3px) rotate(90deg);
 }
 
+/* ---------- pile cells (Deck/Extra/GY/Banished/Field, in the field grid) ---------- */
+
+/* Unoccupied -- reuses the plain .card-slot.empty look (centering included),
+   just with a label so an otherwise-blank corner slot still reads as "this
+   is the GY". */
 .pile-cell-label {
   font-size: 10px;
   font-weight: 700;
@@ -796,6 +806,30 @@
   gap: 10px;
   margin-top: 14px;
   flex-wrap: wrap;
+}
+
+.modal-card {
+  display: flex;
+  justify-content: center;
+  height: 200px;
+  margin-bottom: 12px;
+}
+
+/* Vertical (attack) + horizontal/rotated (defense) card choice, in place of
+   the old text buttons. Generous gap for the same reason as .zone-row's:
+   the rotated defense card is at full resolution (wider than tall) and
+   would otherwise overflow into its neighbor. Horizontal padding, too --
+   a CSS transform doesn't change layout sizing, so the modal auto-sizes to
+   the *unrotated* footprint and the rotated card's visual overflow would
+   otherwise poke past the modal's own edge without this reserved room. */
+.position-choice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 70px;
+  height: 200px;
+  margin-top: 8px;
+  padding: 0 35px;
 }
 
 .modal-list {

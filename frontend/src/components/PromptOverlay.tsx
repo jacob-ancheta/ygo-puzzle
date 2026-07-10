@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { CardRef } from "../protocol";
+import { POS } from "../boardState";
+import CardTile from "./CardTile";
 
 interface Props {
   prompt: Record<string, unknown>;
@@ -17,12 +19,17 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
   const kind = prompt.prompt as string;
 
   if (kind === "yesno" || kind === "effectyn") {
-    const card = (prompt.card as { name: string } | undefined) ?? contextCard ?? undefined;
+    const card = (prompt.card as CardRef | undefined) ?? contextCard ?? undefined;
     const title = kind === "effectyn"
       ? `Activate effect of ${card?.name ?? "this card"}?`
       : card ? `${card.name}: confirm?` : "Confirm";
     return (
       <Modal title={title}>
+        {card && (
+          <div className="modal-card">
+            <CardTile card={card} />
+          </div>
+        )}
         {prompt.note ? <p className="prompt-note">{prompt.note as string}</p> : null}
         <div className="modal-actions">
           <button className="btn primary" onClick={() => respond({ choice: 1 })}>Yes</button>
@@ -48,20 +55,28 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
   }
 
   if (kind === "position") {
-    const card = prompt.card as { name: string };
+    const card = prompt.card as CardRef;
     const options = prompt.options as string[];
-    const labels: Record<string, string> = {
-      faceup_attack: "Attack",
-      facedown_attack: "Set (Attack)",
-      faceup_defense: "Defense",
-      facedown_defense: "Set (Defense)",
-    };
+    // Collapse the up-to-4 raw options (faceup/facedown x attack/defense)
+    // down to the two orientations a player actually picks between here --
+    // vertical card = Attack, horizontal (rotated, matching how defense
+    // monsters render everywhere else) = Defense. Face-up is preferred over
+    // face-down when both happen to be offered for the same orientation.
+    const attackIdx = options.includes("faceup_attack")
+      ? options.indexOf("faceup_attack")
+      : options.indexOf("facedown_attack");
+    const defenseIdx = options.includes("faceup_defense")
+      ? options.indexOf("faceup_defense")
+      : options.indexOf("facedown_defense");
     return (
       <Modal title={`Position for ${card.name}`}>
-        <div className="modal-actions">
-          {options.map((opt, i) => (
-            <button key={i} className="btn" onClick={() => respond({ choice: i })}>{labels[opt] ?? opt}</button>
-          ))}
+        <div className="position-choice">
+          {attackIdx !== -1 && (
+            <CardTile card={card} selectable onClick={() => respond({ choice: attackIdx })} />
+          )}
+          {defenseIdx !== -1 && (
+            <CardTile card={card} position={POS.FACEUP_DEFENSE} selectable onClick={() => respond({ choice: defenseIdx })} />
+          )}
         </div>
       </Modal>
     );

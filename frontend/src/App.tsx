@@ -18,16 +18,27 @@ const MULTI_SELECT_PROMPTS = new Set(["card", "tribute", "sum"]);
 const HIDDEN_ACTIONS = new Set(["shuffle_hand"]);
 
 // Actions that skip straight to committing (Summon, Set, attack, ...) stay
-// as-is; these ones interrupt with a Yes/No confirm first, since choosing
-// them is otherwise irreversible and there's no other point of no return
-// (e.g. clicking to place a card) to catch a misclick.
+// as-is; these ones interrupt with a confirm step first, since choosing them
+// is otherwise irreversible and there's no other point of no return (e.g.
+// clicking to place a card) to catch a misclick. "Set Spell/Trap" is here
+// specifically so clicking a hand spell/trap with only one option (Set)
+// doesn't commit blind -- Set Monster is left alone since only spells/traps
+// were reported as a problem.
 function needsConfirm(action: string): boolean {
-  return action === "Activate" || action === "activate" || action === "Special Summon";
+  return action === "Activate" || action === "activate" || action === "Special Summon"
+    || action === "Set Spell/Trap";
 }
 
 function confirmLabel(action: string, cardName: string): string {
   if (action === "Special Summon") return `Special Summon ${cardName}?`;
+  if (action === "Set Spell/Trap") return `Set ${cardName}?`;
   return `Activate effect of ${cardName}?`;
+}
+
+// "Set Spell/Trap" reads better as Set/Cancel than a generic Yes/No.
+function confirmButtonLabels(action: string): { confirm: string; cancel: string } {
+  if (action === "Set Spell/Trap") return { confirm: "Set", cancel: "Cancel" };
+  return { confirm: "Yes", cancel: "No" };
 }
 
 interface MenuState {
@@ -39,6 +50,7 @@ interface MenuState {
 
 interface ConfirmState {
   label: string;
+  action: string;
   idx: number;
   card?: CardRef;
 }
@@ -79,15 +91,18 @@ export default function App() {
 
   // Priority toggle OFF: whenever a quick-effect window opens (an optional
   // "chain" prompt -- activate something now, or pass), skip the prompt and
-  // pass immediately instead of asking. But never auto-pass when spe_count
-  // is nonzero -- those leading options are effects that just genuinely
-  // triggered (e.g. "if this card is sent to the GY..."), not incidental
-  // quick-effect availability, and silently passing them means they never
-  // happen at all rather than just skipping a response window.
+  // pass immediately instead of asking -- this is meant for always-available
+  // quick effects (e.g. a hand monster's "banish X; Special Summon this")
+  // that merely happen to be legal right now, not anything that actually
+  // just happened. fresh_trigger (see duel_engine.py's MSG_SELECT_CHAIN
+  // handling) means at least one offered card's own state just changed --
+  // a genuine simultaneous trigger -- and those must always be shown,
+  // toggle or not, since silently passing them means they never happen at
+  // all rather than just skipping a response window.
   useEffect(() => {
     if (priorityOn) return;
     if (prompt?.prompt === "chain" && prompt.can_pass === true && prompt.player === 0
-        && !(prompt.spe_count as number)) {
+        && !prompt.fresh_trigger) {
       respond({ pass: true });
     }
   }, [prompt, priorityOn, respond]);
@@ -100,7 +115,7 @@ export default function App() {
     if (options.length === 1) {
       const { option, idx } = options[0];
       if (needsConfirm(option.action)) {
-        setConfirmAction({ label: confirmLabel(option.action, card.name), idx, card });
+        setConfirmAction({ label: confirmLabel(option.action, card.name), action: option.action, idx, card });
         return;
       }
       setCommittedCard(card);
@@ -274,6 +289,7 @@ export default function App() {
             if (chosen && needsConfirm(chosen.option.action)) {
               setConfirmAction({
                 label: confirmLabel(chosen.option.action, chosen.option.card?.name ?? "this card"),
+                action: chosen.option.action,
                 idx,
                 card: chosen.option.card ?? menu.card,
               });
@@ -301,9 +317,11 @@ export default function App() {
                   setMenu(null);
                 }}
               >
-                Yes
+                {confirmButtonLabels(confirmAction.action).confirm}
               </button>
-              <button className="btn" onClick={() => setConfirmAction(null)}>No</button>
+              <button className="btn" onClick={() => setConfirmAction(null)}>
+                {confirmButtonLabels(confirmAction.action).cancel}
+              </button>
             </div>
           </div>
         </div>

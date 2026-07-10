@@ -654,6 +654,16 @@ def run(engine):
     stream = engine.stream
     pending = None
     current_turn_player = 0
+    # Card codes that moved zones or changed position since the player last
+    # had normal idle/battle control. A "chain" prompt offering an effect on
+    # one of these cards means it's a genuine trigger (its own state just
+    # changed) rather than an always-available quick effect that merely
+    # happens to be legal right now (e.g. a hand monster's "banish X;
+    # Special Summon this") -- see the priority-toggle handling below and
+    # in App.tsx, which must never auto-pass the former but always may the
+    # latter. Reset at MSG_SELECT_IDLECMD/MSG_SELECT_BATTLECMD, the points
+    # where the player regains that normal open-game-state control.
+    recently_touched = set()
 
     while True:
         msg = pending if pending is not None else stream.u8()
@@ -686,6 +696,7 @@ def run(engine):
             prev = stream.u32()
             cur = stream.u32()
             stream.u32()  # reason, not needed
+            recently_touched.add(code)
             yield {"type": "event", "event": "move", "card": card_brief(code),
                    "from": describe_location(prev), "to": describe_location(cur)}
 
@@ -789,6 +800,7 @@ def run(engine):
             stream.u8(); stream.u8(); stream.u8()
             prev_pos = stream.u8()
             cur_pos = stream.u8()
+            recently_touched.add(code)
             yield {"type": "event", "event": "pos_change", "card": card_brief(code),
                    "prev_position": prev_pos, "position": cur_pos}
 
@@ -1050,6 +1062,10 @@ def run(engine):
 
         elif msg == MSG_SELECT_IDLECMD:
             player = stream.u8()
+            # The player is back at normal open-game-state control -- clear
+            # the "just changed" tracking so it only ever reflects activity
+            # since this exact point (see `recently_touched` above).
+            recently_touched = set()
             categories = []
             for cat_idx in range(5):  # summon, spsummon, repos, mset, sset
                 n = stream.u8()
@@ -1091,6 +1107,7 @@ def run(engine):
 
         elif msg == MSG_SELECT_BATTLECMD:
             player = stream.u8()
+            recently_touched = set()
             n_chain = stream.u8()
             chains = []
             for _ in range(n_chain):
@@ -1161,14 +1178,17 @@ def run(engine):
             player = stream.u8()
             count = stream.u8()
             # spe_count (per ygopro-core processor.cpp: "# of optional trigger
-            # effects") -- the leading spe_count entries in the options list
-            # below are effects that just triggered off a real game event
-            # (e.g. "if this card is sent to the GY..."); anything after that
-            # is an incidentally-available quick effect with nothing actually
-            # triggering it. Only the latter is safe to auto-pass when the
-            # priority toggle is off -- auto-passing a real simultaneous
-            # trigger silently discards it instead of skipping a choice.
-            spe_count = stream.u8()
+            # effects") looked like the right signal here at first, but it's
+            # not usable for the priority toggle: the engine force-sets it to
+            # the full option count whenever a chain is already in progress,
+            # which includes both "you're mid-way through placing a genuine
+            # simultaneous-trigger batch" (must still ask, toggle or not) and
+            # "unrelated ambient quick-effect check" (should honor the
+            # toggle) -- those look identical in spe_count. It's still read
+            # off the wire below since the byte has to be consumed either
+            # way, just not used for this decision -- see `recently_touched`
+            # and its use a few lines down instead.
+            stream.u8()
             stream.u32()  # hint_timing (self)
             stream.u32()  # hint_timing (opponent)
             chains = []
@@ -1180,6 +1200,12 @@ def run(engine):
                 desc = stream.u32()
                 chains.append((forced, code, desc))
             any_forced = any(forced for forced, _, _ in chains)
+            # A genuine simultaneous trigger's card just changed zone/position
+            # (see `recently_touched`) -- as opposed to an always-available
+            # quick effect (e.g. a hand monster's "banish X; Special Summon
+            # this") that merely happens to be legal right now. Only the
+            # latter is safe for the priority toggle to auto-pass.
+            fresh_trigger = any(code in recently_touched for _, code, _ in chains)
 
             if not chains:
                 # nothing available to activate -- don't bother asking, just pass
@@ -1206,12 +1232,12 @@ def run(engine):
                     if any_forced:
                         choice = yield from ask_index(
                             {"type": "prompt", "prompt": "chain", "player": player,
-                             "options": options, "can_pass": False, "spe_count": spe_count,
+                             "options": options, "can_pass": False, "fresh_trigger": fresh_trigger,
                              "note": "auto-pass wasn't legal"}, len(chains))
                     else:
                         choice = yield from _ask_chain_or_pass(
                             dict(prompt="chain", player=player, options=options,
-                                 spe_count=spe_count, note="auto-pass wasn't legal"))
+                                 fresh_trigger=fresh_trigger, note="auto-pass wasn't legal"))
                     engine.send_i(choice)
                 pending = yield from interact(engine, ask)
             elif chains and player != 1:
@@ -1221,10 +1247,10 @@ def run(engine):
                     if any_forced:
                         choice = yield from ask_index(
                             {"type": "prompt", "prompt": "chain", "player": player,
-                             "options": options, "can_pass": False, "spe_count": spe_count}, len(chains))
+                             "options": options, "can_pass": False, "fresh_trigger": fresh_trigger}, len(chains))
                     else:
                         choice = yield from _ask_chain_or_pass(
-                            dict(prompt="chain", player=player, options=options, spe_count=spe_count))
+                            dict(prompt="chain", player=player, options=options, fresh_trigger=fresh_trigger))
                     engine.send_i(choice)
                 pending = yield from interact(engine, ask)
 
