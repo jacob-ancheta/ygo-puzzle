@@ -186,6 +186,8 @@ lib.set_message_handler(_message_handler_cb)
 
 lib.create_duel.restype = ctypes.c_ssize_t
 lib.create_duel.argtypes = [ctypes.c_uint32]
+lib.end_duel.restype = None
+lib.end_duel.argtypes = [ctypes.c_ssize_t]
 lib.preload_script.restype = ctypes.c_int32
 lib.query_field_card.restype = ctypes.c_int32
 lib.query_field_card.argtypes = [ctypes.c_ssize_t, ctypes.c_uint8, ctypes.c_uint8, ctypes.c_uint32,
@@ -328,10 +330,32 @@ class DuelEngine:
         lib.set_responseb(ctypes.c_ssize_t(self.pduel), buf_out)
 
     def close(self):
-        """Release this engine's entry in the process-global setup-script
-        registry. Call once when the connection using it ends."""
+        """Release this engine's resources. Call once when the connection
+        using it ends -- and, like every other call in this class, only ever
+        from the single engine-executor thread (see server.py's run_blocking
+        usage), since this now reaches into the C library too and
+        ygopro-core's thread-safety under concurrent access is unverified.
+
+        end_duel() matters more than it looks: without it, create_duel()'s
+        native duel object is never freed -- every single attempt, by every
+        user, past or present, leaks its C++ duel state (cards, effects, Lua
+        state) for the life of the process. In a Wordle-style app meant to
+        run continuously for many concurrent users making many attempts,
+        that's an unbounded leak that eventually OOMs the server; it was
+        invisible during solo/local testing only because the process gets
+        restarted constantly there.
+        """
+        lib.end_duel(ctypes.c_ssize_t(self.pduel))
         if self.setup_script_name:
             _puzzle_setup_scripts.pop(self.setup_script_name, None)
+            # Same shape of leak as above but on the Python side: each
+            # attempt's setup script gets its own unique virtual filename
+            # (see build_puzzle_setup_script), and script_reader_impl caches
+            # every buffer it ever builds in _script_cache with no eviction.
+            # Safe to drop only now, after end_duel() above -- the C engine
+            # must be done referencing this buffer's memory before Python is
+            # free to reclaim it.
+            _script_cache.pop(self.setup_script_name, None)
 
 
 def initial_board_state(engine):

@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from websockets.exceptions import WebSocketException
 
 import puzzle_registry
 from duel_engine import DuelEngine, DuelEnded, PuzzleLoadError, run, initial_board_state
@@ -74,27 +75,47 @@ async def duel_socket(websocket: WebSocket):
     try:
         await websocket.send_json({"type": "event", "event": "puzzle_loaded",
                                     "date": resolved_date, "win_condition": puzzle["win_condition"]})
-        await websocket.send_json(initial_board_state(engine))
+        # Routed through run_blocking like every other engine-adjacent call:
+        # it doesn't touch the ctypes pduel handle, but it does call into
+        # card_lookup.py (via card_brief()), which now reuses a single
+        # sqlite3 connection across calls -- and that connection is only
+        # ever safe to use from the one thread that created it (see
+        # card_lookup.py). Calling this directly on the event-loop thread
+        # instead of the engine executor thread was a real bug, caught live:
+        # sqlite3.ProgrammingError, "created in thread X, used in thread Y".
+        await websocket.send_json(await run_blocking(initial_board_state, engine))
 
         gen = run(engine)
         response = None
-        try:
-            while True:
-                try:
-                    item = await run_blocking(gen.send, response)
-                except DuelEnded:
-                    await websocket.send_json({"type": "event", "event": "duel_ended",
-                                                "message": "no more messages from the engine"})
-                    break
-                except StopIteration:
-                    break
+        while True:
+            try:
+                item = await run_blocking(gen.send, response)
+            except DuelEnded:
+                await websocket.send_json({"type": "event", "event": "duel_ended",
+                                            "message": "no more messages from the engine"})
+                break
+            except StopIteration:
+                break
 
-                await websocket.send_json(item)
-                if item["type"] == "prompt":
-                    response = await websocket.receive_json()
-                else:
-                    response = None
-        except WebSocketDisconnect:
-            pass
+            await websocket.send_json(item)
+            if item["type"] == "prompt":
+                response = await websocket.receive_json()
+            else:
+                response = None
+    except (WebSocketDisconnect, WebSocketException):
+        # The client disconnected, or -- just as commonly at any real scale
+        # -- reconnected (the restart button/key closes the old socket and
+        # opens a new one), racing whatever this connection was in the
+        # middle of sending/receiving. Not a bug: there's nothing left to do
+        # with a socket that's already gone, and nothing worth logging as an
+        # error for every ordinary restart.
+        pass
     finally:
-        engine.close()
+        # Routed through the same single-worker executor as every other
+        # engine call (not called directly here) -- close() now also calls
+        # into the C library (lib.end_duel(), see duel_engine.py) to release
+        # the native duel object, and that must never run concurrently with
+        # -- or on a different thread than -- this duel's other ctypes calls,
+        # since ygopro-core's thread-safety under concurrent access is
+        # unverified.
+        await run_blocking(engine.close)

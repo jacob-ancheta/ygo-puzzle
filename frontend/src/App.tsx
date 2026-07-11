@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import { useDuelSocket } from "./useDuelSocket";
 import Board, { type PileView, type PendingPlacementView } from "./components/Board";
@@ -71,6 +71,37 @@ interface ConfirmState {
 
 export default function App() {
   const { board, prompt, connected, error, connect, respond } = useDuelSocket(WS_URL);
+
+  // A restart isn't free server-side (a fresh native duel object, a new
+  // shuffle/deal, an initial phase resolution -- all serialized behind
+  // server.py's single-worker engine executor, shared across every
+  // connected user), so reflexive spam -- holding R (keydown auto-repeats),
+  // mashing the button -- shouldn't turn into a matching flood of restarts.
+  // This is deliberately just a client-side cooldown, not a queue: extra
+  // presses inside the window are dropped outright, not deferred.
+  const lastRestartRef = useRef(0);
+  const restart = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRestartRef.current < 750) return;
+    lastRestartRef.current = now;
+    connect();
+  }, [connect]);
+
+  // "R" restarts the puzzle from anywhere -- matches the key badge on the
+  // restart button. Ignored while a text prompt (announce_card/race/attrib)
+  // has an <input> focused, so typing an "r" into a card name doesn't
+  // accidentally blow away the attempt.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key.toLowerCase() !== "r" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      restart();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [restart]);
+
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmState | null>(null);
   const [selection, setSelection] = useState<number[]>([]);
@@ -401,22 +432,28 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>YGO Puzzle</h1>
+        <h1>Duel Puzzdle</h1>
         <div className="connection-status">
           <span className={`dot ${connected ? "connected" : "disconnected"}`} />
           {connected ? "Connected" : "Disconnected"}
-          <button className="btn small" onClick={connect}>New Attempt</button>
         </div>
       </header>
 
-      <button
-        className={`priority-toggle ${priorityOn ? "on" : "off"}`}
-        onClick={() => setPriorityOn((v) => !v)}
-        title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
-      >
-        <span className="priority-toggle-label">Toggle</span>
-        <span className="priority-toggle-state">{priorityOn ? "ON" : "OFF"}</span>
-      </button>
+      <div className="side-controls">
+        <button
+          className={`priority-toggle ${priorityOn ? "on" : "off"}`}
+          onClick={() => setPriorityOn((v) => !v)}
+          title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
+        >
+          <span className="priority-toggle-label">Toggle</span>
+          <span className="priority-toggle-state">{priorityOn ? "ON" : "OFF"}</span>
+        </button>
+
+        <button className="restart-button" onClick={restart} title="Restart the puzzle (R)">
+          <span className="restart-button-label">Restart</span>
+          <span className="restart-button-key">R</span>
+        </button>
+      </div>
 
       {error ? (
         <div className="error-banner">

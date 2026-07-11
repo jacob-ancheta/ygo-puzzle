@@ -749,14 +749,21 @@
 
 .selection-bar-actions { display: flex; gap: 8px; }
 
-/* ---------- priority toggle ---------- */
+/* ---------- side controls (priority toggle + restart) ---------- */
 
-.priority-toggle {
+.side-controls {
   position: fixed;
   left: 16px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.priority-toggle,
+.restart-button {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -770,9 +777,11 @@
   font-family: inherit;
 }
 
-.priority-toggle:hover { border-color: var(--ink-500); }
+.priority-toggle:hover,
+.restart-button:hover { border-color: var(--ink-500); }
 
-.priority-toggle-label {
+.priority-toggle-label,
+.restart-button-label {
   font-size: 10px;
   font-weight: 600;
   color: var(--ink-300);
@@ -780,7 +789,8 @@
   letter-spacing: 0.06em;
 }
 
-.priority-toggle-state {
+.priority-toggle-state,
+.restart-button-key {
   font-size: 13px;
   font-weight: 700;
   padding: 2px 12px;
@@ -790,6 +800,13 @@
 
 .priority-toggle.on .priority-toggle-state { background: var(--accent-dim); color: var(--ink-950); }
 .priority-toggle.off .priority-toggle-state { background: var(--ink-700); color: var(--ink-300); }
+
+.restart-button-key {
+  background: var(--ink-700);
+  color: var(--ink-300);
+  font-family: inherit;
+}
+.restart-button:hover .restart-button-key { background: var(--ink-600); color: var(--ink-100); }
 
 /* ---------- action menu ---------- */
 
