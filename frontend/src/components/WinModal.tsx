@@ -39,25 +39,14 @@ export default function WinModal({ winSummary, communityPosition, onClose }: Pro
     : `I solved today's Duel Puzzdle! Try it: ${window.location.origin}`;
 
   async function handleShare() {
-    if (typeof navigator.share === "function") {
-      try {
-        await navigator.share({ text: shareText });
-      } catch (err) {
-        // AbortError just means the user closed the share sheet -- not an
-        // error, and shouldn't fall through to the clipboard fallback.
-        if (err instanceof Error && err.name === "AbortError") return;
-      }
-      return;
-    }
-    if (navigator.clipboard) {
-      try {
-        await navigator.clipboard.writeText(shareText);
-        setShareStatus("copied");
-        setTimeout(() => setShareStatus("idle"), 2000);
-      } catch {
-        // Permission denied or similar -- nothing useful to do beyond not
-        // pretending it worked; the text is still visible in the modal.
-      }
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(shareText);
+      setShareStatus("copied");
+      setTimeout(() => setShareStatus("idle"), 2000);
+    } catch {
+      // Permission denied or similar -- nothing useful to do beyond not
+      // pretending it worked; the text is still visible in the modal.
     }
   }
 
