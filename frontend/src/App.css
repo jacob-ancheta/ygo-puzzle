@@ -938,3 +938,22 @@
   .app-main { grid-template-columns: 1fr; }
   .board-main { flex-direction: column; }
 }
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-counters {
+  font-size: 13px;
+  color: var(--ink-200);
+  white-space: nowrap;
+}
+
+.modal-list li {
+  list-style: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--ink-800);
+}

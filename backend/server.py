@@ -21,12 +21,15 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from websockets.exceptions import WebSocketException
 
+import leaderboard
 import puzzle_registry
+from auth import verify_supabase_jwt
 from duel_engine import DuelEngine, DuelEnded, PuzzleLoadError, run, initial_board_state
 
 app = FastAPI()
@@ -73,10 +76,29 @@ def list_puzzles():
     return {"today": puzzle_registry.today_str(), "dates": puzzle_registry.available_dates()}
 
 
+@app.get("/leaderboard/today")
+async def leaderboard_today(date: str | None = None):
+    resolved_date, _ = puzzle_registry.resolve_puzzle_for(date)
+    rows = await leaderboard.today_leaderboard(resolved_date)
+    return {"puzzle_date": resolved_date, "results": rows}
+
+
+@app.get("/profile/me")
+async def profile_me(authorization: str = Header(default="")):
+    token = authorization.removeprefix("Bearer ").strip()
+    user_id = await verify_supabase_jwt(token)
+    if user_id is None:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    profile = await leaderboard.get_profile(user_id)
+    return profile or {"error": "profile not found"}
+
+
 @app.websocket("/ws")
 async def duel_socket(websocket: WebSocket):
     await websocket.accept()
     date_param = websocket.query_params.get("date")
+    token_param = websocket.query_params.get("token")
+    user_id = await verify_supabase_jwt(token_param)
 
     try:
         resolved_date, puzzle = puzzle_registry.resolve_puzzle_for(date_param)
@@ -125,6 +147,13 @@ async def duel_socket(websocket: WebSocket):
                 await websocket.send_json({"type": "event", "event": "duel_ended",
                                             "message": "no more messages from the engine"})
                 break
+
+            if (user_id is not None and item.get("type") == "event"
+                    and item.get("event") == "win" and item.get("winner") == 0):
+                try:
+                    await leaderboard.record_win(user_id, resolved_date)
+                except Exception:
+                    pass  # a Supabase hiccup must never break the player's duel
 
             await websocket.send_json(item)
             if item["type"] == "prompt":
