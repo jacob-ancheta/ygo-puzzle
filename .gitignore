@@ -8,3 +8,4 @@ ygopro-scripts/
 cards.db
 backend/local_config.py
 backend/card_images/
+.claude/
