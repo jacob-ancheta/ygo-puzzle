@@ -957,3 +957,12 @@
   border-radius: 6px;
   background: var(--ink-800);
 }
+
+.notice-banner {
+  background: var(--ink-800);
+  color: var(--ink-100);
+  padding: 10px 20px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--ink-600);
+  border-left: 3px solid var(--glow);
+}

@@ -12,3 +12,5 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: SITE_NOTICE
+        sync: false
