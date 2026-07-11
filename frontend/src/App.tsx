@@ -76,6 +76,25 @@ export default function App() {
   const { session, user, signInWithEmail, signOut } = useAuth();
   const { board, prompt, connected, error, connect, respond } = useDuelSocket(WS_URL, () => session?.access_token);
 
+  // useDuelSocket's own mount effect connects immediately, before Supabase
+  // has necessarily finished hydrating a session from the magic-link
+  // redirect's URL fragment (or localStorage) -- that first connection can
+  // easily race ahead of sign-in and land anonymous even though the UI
+  // catches up moments later and shows the player as signed in for the rest
+  // of the attempt. Reconnecting the instant sign-in resolves (not on every
+  // subsequent session change, just the null -> real transition) guarantees
+  // the attempt actually being played is the one the server sees as
+  // authenticated, at the cost of restarting whatever the first split
+  // second of anonymous play was -- reproduced live: signed-in players who
+  // won got no puzzle_results row because their whole duel had actually run
+  // on the pre-sign-in anonymous connection.
+  const wasSignedInRef = useRef(false);
+  useEffect(() => {
+    const justSignedIn = !wasSignedInRef.current && user !== null;
+    wasSignedInRef.current = user !== null;
+    if (justSignedIn) connect();
+  }, [user, connect]);
+
   // A restart isn't free server-side (a fresh native duel object, a new
   // shuffle/deal, an initial phase resolution -- all serialized behind
   // server.py's single-worker engine executor, shared across every
