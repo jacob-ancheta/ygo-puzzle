@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import { useDuelSocket } from "./useDuelSocket";
+import { useAuth } from "./useAuth";
 import Board, { type PileView, type PendingPlacementView } from "./components/Board";
 import ActionMenu from "./components/ActionMenu";
 import PromptOverlay from "./components/PromptOverlay";
 import SelectionBar from "./components/SelectionBar";
 import CardDetailPanel from "./components/CardDetailPanel";
 import CardTile from "./components/CardTile";
+import AuthPanel from "./components/AuthPanel";
+import LeaderboardModal from "./components/LeaderboardModal";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { WS_URL } from "./config";
@@ -70,7 +73,8 @@ interface ConfirmState {
 }
 
 export default function App() {
-  const { board, prompt, connected, error, connect, respond } = useDuelSocket(WS_URL);
+  const { session, user, signInWithEmail, signOut } = useAuth();
+  const { board, prompt, connected, error, connect, respond } = useDuelSocket(WS_URL, () => session?.access_token);
 
   // A restart isn't free server-side (a fresh native duel object, a new
   // shuffle/deal, an initial phase resolution -- all serialized behind
@@ -102,6 +106,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [restart]);
 
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmState | null>(null);
   const [selection, setSelection] = useState<number[]>([]);
@@ -437,6 +442,7 @@ export default function App() {
           <span className={`dot ${connected ? "connected" : "disconnected"}`} />
           {connected ? "Connected" : "Disconnected"}
         </div>
+        <AuthPanel user={user} accessToken={session?.access_token} signInWithEmail={signInWithEmail} signOut={signOut} />
       </header>
 
       <div className="side-controls">
@@ -453,7 +459,13 @@ export default function App() {
           <span className="restart-button-label">Restart</span>
           <span className="restart-button-key">R</span>
         </button>
+
+        <button className="btn small" onClick={() => setShowLeaderboard(true)} title="Today's top solvers">
+          Leaderboard
+        </button>
       </div>
+
+      {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
 
       {error ? (
         <div className="error-banner">

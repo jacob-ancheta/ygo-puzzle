@@ -6,7 +6,7 @@ export interface DuelError {
   suggestions?: Record<string, { code: number; name: string }[]>;
 }
 
-export function useDuelSocket(url: string) {
+export function useDuelSocket(url: string, getToken?: () => string | undefined) {
   const [board, setBoard] = useState<BoardState>(createInitialBoard());
   const [prompt, setPrompt] = useState<Record<string, unknown> | null>(null);
   const [connected, setConnected] = useState(false);
@@ -24,7 +24,9 @@ export function useDuelSocket(url: string) {
     setError(null);
 
     const generation = ++generationRef.current;
-    const ws = new WebSocket(url);
+    const token = getToken?.();
+    const fullUrl = token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
+    const ws = new WebSocket(fullUrl);
     wsRef.current = ws;
 
     ws.onopen = () => { if (generationRef.current === generation) setConnected(true); };
@@ -48,7 +50,10 @@ export function useDuelSocket(url: string) {
         setPrompt(item);
       }
     };
-  }, [url]);
+    // getToken is included so a fresh sign-in/out is reflected on the *next*
+    // connect() call -- omitting it would let this closure keep reading
+    // whatever session existed when this callback was first created.
+  }, [url, getToken]);
 
   useEffect(() => {
     connect();

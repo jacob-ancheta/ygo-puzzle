@@ -7,3 +7,7 @@ ygopro-core/
 ygopro-scripts/
 backend/local_config.py
 .claude/
+.env
+.env.local
+frontend/.env
+frontend/.env.local
