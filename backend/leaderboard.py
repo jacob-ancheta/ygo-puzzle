@@ -30,6 +30,28 @@ async def record_win(user_id: str, puzzle_date: str) -> dict | None:
         return rows[0] if rows else None
 
 
+async def already_recorded(user_id: str, puzzle_date: str) -> bool:
+    """Whether this signed-in user already has a puzzle_results row for this
+    date -- checked before bumping the community completion counter so a
+    retry (unlimited by design, see record_win) doesn't inflate the "you
+    were the Nth" number shown to other players."""
+    if not SUPABASE_URL or not SERVICE_ROLE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/puzzle_results",
+            headers=_headers(),
+            params={
+                "puzzle_date": f"eq.{puzzle_date}",
+                "user_id": f"eq.{user_id}",
+                "select": "user_id",
+                "limit": "1",
+            },
+        )
+        resp.raise_for_status()
+        return len(resp.json()) > 0
+
+
 async def record_completion(puzzle_date: str) -> int | None:
     """Increments a simple per-day counter on every win, regardless of
     sign-in status -- deliberately separate from record_win/puzzle_results:

@@ -160,16 +160,25 @@ async def duel_socket(websocket: WebSocket):
                 break
 
             if item.get("type") == "event" and item.get("event") == "win" and item.get("winner") == 0:
-                # Community count: unconditional, every win regardless of
-                # sign-in status. Deliberately not dedupe-safe (see
-                # leaderboard.record_completion's own docstring) -- shown as
-                # a rough stat to anonymous players only, never fed into the
-                # real leaderboard below.
+                # Community count: every DISTINCT solver counts once. Retries
+                # are unlimited by design (see record_win), so a signed-in
+                # player replaying after already winning must not bump this
+                # again -- checked via already_recorded before incrementing.
+                # Anonymous wins still can't be deduped (no stable identity)
+                # and always increment, same as before.
+                is_repeat_signed_in_win = False
+                if user_id is not None:
+                    try:
+                        is_repeat_signed_in_win = await leaderboard.already_recorded(user_id, resolved_date)
+                    except Exception as e:
+                        print(f"[duel_socket] already_recorded check failed for user_id={user_id!r} date={resolved_date!r}: {e!r}")
+
                 community_position = None
-                try:
-                    community_position = await leaderboard.record_completion(resolved_date)
-                except Exception as e:
-                    print(f"[duel_socket] record_completion failed for date={resolved_date!r}: {e!r}")
+                if not is_repeat_signed_in_win:
+                    try:
+                        community_position = await leaderboard.record_completion(resolved_date)
+                    except Exception as e:
+                        print(f"[duel_socket] record_completion failed for date={resolved_date!r}: {e!r}")
                 item["community_position"] = community_position
 
                 # The real, tamper-resistant leaderboard -- only for
