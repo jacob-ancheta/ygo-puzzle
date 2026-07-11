@@ -116,6 +116,14 @@
   justify-content: center;
 }
 
+/* Back to a real flex sibling of .field-center (not a corner overlay --
+   that was tried and reverted, see git history) -- reserving its own
+   column width here is what stops .field-center from ever expanding into
+   that space in the first place, which is more robust than relying on
+   card sizing alone to avoid the corners: confirmed live that even with
+   .zone-row correctly stretching and .card-slot able to shrink (below),
+   some viewport sizes could still overflow past the available width
+   before the corner-anchored badges got out of the way. */
 .piles-column {
   display: flex;
   flex-direction: column;
@@ -136,29 +144,29 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4px 14px;
+  padding: 5px 18px;
   border-radius: 6px;
   background: var(--ink-800);
   border: 1px solid var(--ink-600);
-  min-width: 90px;
+  min-width: 117px; /* ~30% bigger than the original 90px */
 }
 
 .lp-label {
-  font-size: 9px;
+  font-size: 12px; /* ~30% bigger than the original 9px */
   color: var(--ink-300);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 .lp-value {
-  font-size: 16px;
+  font-size: 21px; /* ~30% bigger than the original 16px */
   font-weight: 700;
   color: var(--accent);
   letter-spacing: 0.02em;
 }
 
 .hand-count {
-  font-size: 11px;
+  font-size: 14px; /* ~30% bigger than the original 11px */
   color: var(--ink-300);
 }
 
@@ -168,8 +176,18 @@
   align-items: center;
   gap: 10px;
   min-height: 0;
-  flex-shrink: 0;
-  width: fit-content;
+  /* Was width:fit-content + flex-shrink:0 -- but fit-content can't
+     correctly measure a .zone-row's actual width when its cards are sized
+     by aspect-ratio off *available height*, not genuine intrinsic content
+     size: confirmed live, field-center's fit-content computed to 345px
+     while every row inside it naturally rendered at 627px, well past its
+     own box. flex:1 sidesteps the miscalculation entirely by just taking
+     whatever width board-main actually gives it (the rest, after
+     .piles-column's own reserved column) instead of trying to
+     self-measure; harmless since field-center has no visible
+     background/border of its own -- each row still centers its own content
+     via justify-content:center regardless of how wide this box is. */
+  flex: 1;
 }
 
 .zone-row {
@@ -178,7 +196,25 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(28px, 5.6vh, 90px); /* generous on purpose: full-resolution (unshrunk) rotated defense-position tiles are wider than their slot and would overlap a tighter gap -- see .card-tile.defense */
+  /* .field-center's own align-items:center (needed so .center-divider's
+     narrower phase-button stays centered rather than stretched full-width)
+     means rows are never stretched to match field-center's box by default
+     -- each row instead renders at its own natural/preferred width and
+     gets centered, bleeding past field-center's box on both sides
+     regardless of how wide that box actually is. Confirmed live: a row
+     rendered 560px wide while field-center's own box was only 434px.
+     Stretching just the rows (not the divider) fixes that without
+     disturbing the divider's intentional centering. */
+  align-self: stretch;
+  /* vh-only (as this was originally) ignores width entirely -- confirmed
+     live that at some desktop sizes (e.g. 1128x734) a generous available
+     height computes a large gap that, summed across a 7-slot row, demands
+     more total width than the viewport actually has. Taking the smaller of
+     a vh-based or vw-based value keeps the row's total width in check
+     when EITHER dimension is scarce, not just height; the 28px floor still
+     protects the defense-position card-collision case the vh formula was
+     originally sized for (see .card-tile.defense). */
+  gap: clamp(28px, min(5.6vh, 3vw), 90px);
   /* No overflow-x here on purpose: setting overflow on either axis forces
      the other to clip too (a CSS overflow-x/-y coupling rule), which cut
      the actionable/selected glow (box-shadow, meant to bleed past the
@@ -342,8 +378,25 @@
   height: 100%;
   aspect-ratio: 108 / 168;
   max-height: 180px;
+  /* Width was purely height-derived with no ceiling at all outside the
+     phone-landscape breakpoint below -- confirmed live this isn't just a
+     mobile problem: at some desktop sizes (e.g. 1128x734) there's enough
+     *height* to render large cards, but a full 7-9-slot row of them still
+     doesn't fit the available *width*, and the overflow bled silently past
+     .field-center's own box since neither it nor .zone-row clips. Capping
+     width relative to viewport width (not just the existing height-based
+     max-height) keeps a row's total width within whatever's actually
+     available, at any viewport size, not just the ones already tested. */
+  max-width: min(116px, 8vw);
   border-radius: 6px;
-  flex-shrink: 0;
+  /* Was flex-shrink:0 -- now that .zone-row actually stretches to
+     field-center's real width (see .zone-row's align-self above), cards
+     need to be *able* to shrink when a row's aspect-ratio-preferred total
+     width still doesn't fit the space actually available (e.g. once
+     .board-main's corner-badge padding is subtracted). flex-shrink:0
+     would just push the excess back into the same silent overflow this
+     whole fix is for. */
+  flex-shrink: 1;
 }
 
 .card-slot.empty {
@@ -937,6 +990,17 @@
 @media (max-width: 900px) {
   .app-main { grid-template-columns: 1fr; }
   .board-main { flex-direction: column; }
+  /* Pre-existing bug, unrelated to the max-height:500px breakpoint below:
+     collapsing to one grid column with no grid-template-rows left Board
+     and CardDetailPanel competing for height via auto-sized grid rows --
+     CardDetailPanel's natural content height (a full card image + text)
+     could squeeze Board's row down far enough to clip .piles-column off
+     the top of the viewport entirely. .card-detail already supports
+     shrinking (overflow-y:auto, min-height:0 -- App.css:665-675), it just
+     never had a bounded height to shrink into. Confirmed live at 700x700
+     (well outside the max-height:500px breakpoint, so this was purely the
+     original rule's own bug). */
+  .app-main { grid-template-rows: minmax(0, 1fr) minmax(70px, 130px); }
 }
 
 .auth-panel {
@@ -965,4 +1029,152 @@
   font-size: 13px;
   border-bottom: 1px solid var(--ink-600);
   border-left: 3px solid var(--glow);
+}
+
+/* ---------- mobile ---------- */
+
+.orientation-gate { display: none; }
+
+/* A real phone in portrait has both dimensions small (largest common
+   phones ~430x932); a resized-narrow desktop window keeps a large height
+   (rarely under ~920px of content height on any real monitor, even
+   tiled/snapped), so ANDing max-width with max-height excludes that case
+   without needing a JS orientation check. */
+@media (orientation: portrait) and (max-width: 500px) and (max-height: 920px) {
+  .orientation-gate {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: var(--ink-950);
+    color: var(--ink-100);
+    text-align: center;
+    padding: 24px;
+  }
+
+  .orientation-gate-icon {
+    font-size: 48px;
+    display: inline-block;
+    animation: orientation-gate-rotate 2s ease-in-out infinite;
+  }
+
+  .orientation-gate h2 { margin: 0; font-size: 20px; color: var(--ink-50); }
+  .orientation-gate p { margin: 0; font-size: 14px; color: var(--ink-300); }
+}
+
+@keyframes orientation-gate-rotate {
+  0%, 20% { transform: rotate(0deg); }
+  50%, 70% { transform: rotate(90deg); }
+  100% { transform: rotate(90deg); }
+}
+
+/* Keyed on height alone, not width or orientation -- "not enough vertical
+   room for 5 stacked zone-rows" is a generic short-viewport problem (would
+   equally affect a desktop window shrunk to 400px tall), not a phone-only
+   one. Placed after the max-width:900px rule above so it wins on the
+   properties both touch: that rule's grid-template-columns/flex-direction
+   changes were tuned for a narrow-but-TALL window (e.g. snapped to half a
+   monitor) and actively mis-stack things here -- confirmed live, a real
+   phone in landscape (812x375) was rendering .piles-column and
+   .field-center above the visible viewport (negative top offsets) because
+   of that rule's column stacking, not just insufficient card size. */
+@media (max-height: 500px) {
+  .app { overflow-y: auto; overflow-x: hidden; } /* fallback only -- the pixel budget below is tuned for zero scroll */
+
+  /* Both this block and max-width:900px above can fire together (e.g. a
+     812x375 phone in landscape is both). Restoring 2 columns means Board
+     and CardDetailPanel go back to sharing one row, so the 900px rule's
+     2-row grid-template-rows must be reset here too -- otherwise its
+     second row track still reserves height even though nothing renders
+     into it, wasting space that should go to the board. Confirmed live:
+     board-main dropped from 252px to 110px without this reset. */
+  .app-main { grid-template-columns: 1fr 280px; grid-template-rows: 1fr; }
+  .board-main { flex-direction: row; }
+
+  .app-header { padding: 4px 10px; }
+  .app-header h1 { font-size: 13px; }
+  .connection-status { font-size: 11px; }
+  .app-main { padding: 4px 6px; }
+  .board { padding: 4px 6px; gap: 4px; }
+
+  /* A fixed hand-area height (rather than re-tuning the flex:5 1 0 ratio
+     against .board-main) means board-main's flex:1 1 auto automatically
+     absorbs whatever's left, including when a status/error/notice banner
+     is showing -- the ratio approach was fragile since actual chrome
+     overhead varies. */
+  .board-main { flex: 1 1 auto; }
+  .hand-area { flex: 0 0 66px; }
+  .hand-row { padding: 6px 0; }
+
+  .field-center { gap: 3px; }
+  .center-divider { gap: 8px; }
+  .phase-button { padding: 2px 10px; font-size: 11px; }
+
+  /* Deliberately NOT overridden: already resolves to its 28px floor at
+     375px height (5.6vh =~ 21px, below the floor). A smaller override was
+     tried and reverted -- rotated defense-position cards stay unscaled
+     (App.css's .card-tile.defense comment) and rely on this exact gap to
+     not visually collide with their neighbors; confirmed live that
+     shrinking it to single digits causes adjacent defense-position cards
+     to overlap by 6-15px. 28px has room to spare at this viewport width
+     once the structural fixes above are in place. */
+
+  /* .piles-column and .field-center both refuse to shrink (flex-shrink:0
+     on both), so together they can want more width than board-main has --
+     confirmed live (a 54px overflow, silently clipped by .board's
+     overflow:hidden). .board-main's own 18px gap plus .lp-badge's 90px
+     min-width were the two biggest contributors; shrinking both closes it
+     without touching card sizing itself. */
+  .board-main { gap: 6px; }
+  .lp-badge { min-width: 36px; padding: 2px 5px; }
+  .lp-label { font-size: 7px; }
+  .lp-value { font-size: 12px; }
+  .piles-column { gap: 3px; }
+
+  /* .field-center is `width: fit-content` + flex-shrink:0 (App.css:172) --
+     its natural content width (driven by .card-slot's height-derived
+     width) doesn't respond to how much room .piles-column also needs, so
+     the remaining overflow after the above has to come off card width
+     itself. A small explicit cap here is enough to close it. */
+  .card-slot { max-width: 24px; }
+
+  /* .side-controls (priority toggle / restart / leaderboard) is
+     position:fixed and doesn't reserve layout space -- confirmed live it
+     overlaps .piles-column at this viewport size. The header's far-right
+     corner is already claimed by AuthPanel (confirmed live: right:4px
+     collided with it) -- there's a large untouched gap between the "Duel
+     Puzzdle" h1 and .connection-status instead, so it goes there. */
+  .side-controls {
+    top: 4px; left: 95px; right: auto; bottom: auto;
+    transform: none;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }
+  /* Base rule stacks label+state/key vertically (flex-direction:column,
+     App.css:765-779) -- confirmed live that even after shrinking padding,
+     the two-line button was 46px tall against the header's own 35px,
+     spilling 13px into the board below. Forcing a single row fits it
+     inside the shrunk header instead. */
+  .priority-toggle, .restart-button {
+    flex-direction: row;
+    padding: 3px 6px;
+    gap: 3px;
+  }
+  .priority-toggle-label, .restart-button-label { font-size: 8px; }
+  .priority-toggle-state, .restart-button-key { font-size: 9px; padding: 1px 5px; }
+
+  /* Same fixed-position problem -- moves just under the header instead of
+     mid-board. Only exercisable with a live multi-select prompt
+     (tribute/sum/select_unselect), flagged for manual QA during real play. */
+  .selection-bar {
+    bottom: auto; top: 30px;
+    padding: 4px 8px;
+    font-size: 11px;
+    gap: 8px;
+  }
 }
