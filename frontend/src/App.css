@@ -956,6 +956,35 @@
   overflow-y: auto;
 }
 
+.win-modal {
+  max-width: 560px;
+}
+
+.win-modal-columns {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 6px;
+}
+
+.win-modal-column {
+  flex: 1;
+  min-width: 0;
+}
+
+.win-modal-column h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--ink-300);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.win-modal-position {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 .prompt-note {
   font-size: 12px;
   color: var(--accent);
@@ -963,6 +992,12 @@
 }
 
 .dim { color: var(--ink-300); font-size: 11px; }
+
+.win-modal-share-preview {
+  user-select: all;
+  word-break: break-word;
+  margin: 4px 0 0;
+}
 
 .text-input {
   width: 100%;
@@ -1012,6 +1047,13 @@
 .profile-counters {
   font-size: 13px;
   color: var(--ink-200);
+  white-space: nowrap;
+}
+
+.display-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-50);
   white-space: nowrap;
 }
 

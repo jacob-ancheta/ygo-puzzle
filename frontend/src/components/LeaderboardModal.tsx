@@ -1,33 +1,11 @@
-import { useEffect, useState } from "react";
-import { API_URL } from "../config";
-
-interface LeaderboardRow {
-  rank: number;
-  solved_at: string;
-  profiles: { display_name: string } | null;
-}
+import { useTodayLeaderboard } from "../useTodayLeaderboard";
 
 interface Props {
   onClose: () => void;
 }
 
 export default function LeaderboardModal({ onClose }: Props) {
-  const [rows, setRows] = useState<LeaderboardRow[] | null>(null);
-  const [puzzleDate, setPuzzleDate] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_URL}/leaderboard/today`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        setRows(data.results ?? []);
-        setPuzzleDate(data.puzzle_date ?? null);
-      })
-      .catch(() => { if (!cancelled) setError("Couldn't load the leaderboard."); });
-    return () => { cancelled = true; };
-  }, []);
+  const { rows, puzzleDate, error } = useTodayLeaderboard();
 
   const medal = (rank: number) => (rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`);
 
