@@ -467,6 +467,12 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="orientation-gate">
+        <span className="orientation-gate-icon" aria-hidden="true">📱</span>
+        <h2>Rotate your device</h2>
+        <p>This puzzle needs a landscape screen to play.</p>
+      </div>
+
       <header className="app-header">
         <h1>Duel Puzzdle</h1>
         <div className="connection-status">
