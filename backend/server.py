@@ -152,8 +152,11 @@ async def duel_socket(websocket: WebSocket):
                     and item.get("event") == "win" and item.get("winner") == 0):
                 try:
                     await leaderboard.record_win(user_id, resolved_date)
-                except Exception:
-                    pass  # a Supabase hiccup must never break the player's duel
+                except Exception as e:
+                    # Logged, not raised: a Supabase hiccup must never break
+                    # the player's duel, but a silently swallowed failure
+                    # here was previously undiagnosable from Render's logs.
+                    print(f"[duel_socket] record_win failed for user_id={user_id!r} date={resolved_date!r}: {e!r}")
 
             await websocket.send_json(item)
             if item["type"] == "prompt":
