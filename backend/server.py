@@ -114,7 +114,16 @@ async def duel_socket(websocket: WebSocket):
                 await websocket.send_json({"type": "event", "event": "duel_ended",
                                             "message": "no more messages from the engine"})
                 break
-            except StopIteration:
+            except RuntimeError as e:
+                # gen.send is called through run_in_executor, which can't carry a
+                # bare StopIteration back across the executor boundary -- it
+                # rewraps generator exhaustion as this RuntimeError instead (see
+                # concurrent.futures.thread). Only swallow that specific case;
+                # any other RuntimeError is a real bug and should still surface.
+                if not isinstance(e.__cause__, StopIteration):
+                    raise
+                await websocket.send_json({"type": "event", "event": "duel_ended",
+                                            "message": "no more messages from the engine"})
                 break
 
             await websocket.send_json(item)
