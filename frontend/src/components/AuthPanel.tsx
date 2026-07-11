@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { API_URL } from "../config";
 import { supabase } from "../supabaseClient";
+import SignInForm from "./SignInForm";
 
 const MAX_NAME_LENGTH = 20;
 
@@ -21,9 +22,6 @@ interface Props {
 
 export default function AuthPanel({ user, accessToken, signInWithEmail, signOut }: Props) {
   const [showSignIn, setShowSignIn] = useState(false);
-  const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
 
   const [showRename, setShowRename] = useState(false);
@@ -40,18 +38,6 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
       .catch(() => {});
     return () => { cancelled = true; };
   }, [accessToken]);
-
-  async function handleSend() {
-    setStatus("sending");
-    setErrorMessage(null);
-    const err = await signInWithEmail(email);
-    if (err) {
-      setStatus("error");
-      setErrorMessage(err);
-    } else {
-      setStatus("sent");
-    }
-  }
 
   function openRename() {
     setNewName(profile?.display_name ?? "");
@@ -116,34 +102,7 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
         <div className="modal-backdrop">
           <div className="modal">
             <h3>Sign in to appear on the leaderboard</h3>
-            {status === "sent" ? (
-              <p>Check your email for a magic link.</p>
-            ) : (
-              <>
-                <input
-                  className="text-input"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoFocus
-                />
-                {status === "error" && errorMessage && <p className="error-banner">{errorMessage}</p>}
-              </>
-            )}
-            <div className="modal-actions">
-              {status !== "sent" && (
-                <button className="btn primary" disabled={!email || status === "sending"} onClick={handleSend}>
-                  {status === "sending" ? "Sending..." : "Send magic link"}
-                </button>
-              )}
-              <button
-                className="btn"
-                onClick={() => { setShowSignIn(false); setStatus("idle"); setEmail(""); setErrorMessage(null); }}
-              >
-                Close
-              </button>
-            </div>
+            <SignInForm signInWithEmail={signInWithEmail} onClose={() => setShowSignIn(false)} />
           </div>
         </div>
       )}

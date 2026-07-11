@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTodayLeaderboard } from "../useTodayLeaderboard";
+import SignInForm from "./SignInForm";
 
 export interface WinSummary {
   rank: number | null;
@@ -9,10 +10,21 @@ export interface WinSummary {
 interface Props {
   winSummary: WinSummary | null | undefined;
   communityPosition: number | null | undefined;
+  // The puzzle date and signed claim token from the win event -- both null
+  // if this was a signed-in win (no claiming needed) or the server has no
+  // CLAIM_TOKEN_SECRET configured. See App.tsx's claim-on-sign-in effect for
+  // the other half of this flow.
+  puzzleDate: string | null | undefined;
+  claimToken: string | null | undefined;
+  signInWithEmail: (email: string) => Promise<string | null>;
   onClose: () => void;
 }
 
-function ordinal(n: number): string {
+// Exported so App.tsx's post-redirect effect reads the same key/shape this
+// writes.
+export const PENDING_CLAIM_KEY = "duelpuzzdle_pending_claim";
+
+export function ordinal(n: number): string {
   const rem100 = n % 100;
   if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
   switch (n % 10) {
@@ -25,9 +37,20 @@ function ordinal(n: number): string {
 
 const medal = (rank: number) => (rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`);
 
-export default function WinModal({ winSummary, communityPosition, onClose }: Props) {
+export default function WinModal({ winSummary, communityPosition, puzzleDate, claimToken, signInWithEmail, onClose }: Props) {
   const { rows, error } = useTodayLeaderboard();
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
+  const [showSignIn, setShowSignIn] = useState(false);
+
+  // The magic-link click is a full-page redirect (see useAuth's
+  // emailRedirectTo), which wipes this modal and all in-memory board state
+  // -- stashing the claim token here is the only way it survives the round
+  // trip. App.tsx picks this back up once `user` resolves after the reload
+  // and posts it to /claim-win, without replaying the puzzle.
+  function stashPendingClaim() {
+    if (!puzzleDate || !claimToken) return;
+    localStorage.setItem(PENDING_CLAIM_KEY, JSON.stringify({ date: puzzleDate, token: claimToken }));
+  }
 
   // Real (signed-in, tamper-resistant) position takes priority; the rough
   // community count is only a fallback so anonymous players still get a
@@ -76,13 +99,21 @@ export default function WinModal({ winSummary, communityPosition, onClose }: Pro
             <h4>Your result</h4>
             {position != null ? (
               <p className="win-modal-position">You finished {ordinal(position)} today!</p>
-            ) : communityPosition != null ? (
-              <>
-                <p className="win-modal-position">You were the {ordinal(communityPosition)} to solve it today!</p>
-                <p>Sign in to save your spot on the leaderboard.</p>
-              </>
             ) : (
-              <p>Sign in to appear on the leaderboard next time.</p>
+              <>
+                {communityPosition != null ? (
+                  <p className="win-modal-position">You were the {ordinal(communityPosition)} to solve it today!</p>
+                ) : (
+                  <p>Sign in to appear on the leaderboard next time.</p>
+                )}
+                {showSignIn ? (
+                  <SignInForm signInWithEmail={signInWithEmail} onBeforeSend={stashPendingClaim} onClose={() => setShowSignIn(false)} />
+                ) : (
+                  <button className="btn small" onClick={() => setShowSignIn(true)}>
+                    Sign in{claimToken ? " to save your spot" : ""}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>

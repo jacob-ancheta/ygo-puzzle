@@ -10,7 +10,7 @@ import CardDetailPanel from "./components/CardDetailPanel";
 import CardTile from "./components/CardTile";
 import AuthPanel from "./components/AuthPanel";
 import LeaderboardModal from "./components/LeaderboardModal";
-import WinModal from "./components/WinModal";
+import WinModal, { ordinal, PENDING_CLAIM_KEY } from "./components/WinModal";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { API_URL, WS_URL } from "./config";
@@ -90,11 +90,39 @@ export default function App() {
   // won got no puzzle_results row because their whole duel had actually run
   // on the pre-sign-in anonymous connection.
   const wasSignedInRef = useRef(false);
+  const [claimResult, setClaimResult] = useState<{ position: number } | null>(null);
   useEffect(() => {
     const justSignedIn = !wasSignedInRef.current && user !== null;
     wasSignedInRef.current = user !== null;
-    if (justSignedIn) connect();
-  }, [user, connect]);
+    if (!justSignedIn) return;
+    connect();
+
+    // If WinModal's "Sign In" button stashed a pending claim before the
+    // magic-link redirect (see PENDING_CLAIM_KEY), redeem it here -- a plain
+    // POST, entirely independent of the duel socket above: the win already
+    // happened server-side, so there's nothing to replay.
+    const raw = localStorage.getItem(PENDING_CLAIM_KEY);
+    if (!raw || !session?.access_token) return;
+    localStorage.removeItem(PENDING_CLAIM_KEY);
+    let pending: { date: string; token: string };
+    try {
+      pending = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    fetch(`${API_URL}/claim-win`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ token: pending.token }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const pos = data.leaderboard?.overall_position;
+        if (pos != null) setClaimResult({ position: pos });
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, connect, session]);
 
   // A restart isn't free server-side (a fresh native duel object, a new
   // shuffle/deal, an initial phase resolution -- all serialized behind
@@ -523,8 +551,23 @@ export default function App() {
         <WinModal
           winSummary={board.winSummary}
           communityPosition={board.communityPosition}
+          puzzleDate={board.puzzleDate}
+          claimToken={board.claimToken}
+          signInWithEmail={signInWithEmail}
           onClose={() => setShowWinModal(false)}
         />
+      )}
+
+      {claimResult && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>🎉 Win saved!</h3>
+            <p>You finished {ordinal(claimResult.position)} today.</p>
+            <div className="modal-actions">
+              <button className="btn primary" onClick={() => setClaimResult(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {siteNotice && <div className="notice-banner">{siteNotice}</div>}
