@@ -12,7 +12,7 @@ import AuthPanel from "./components/AuthPanel";
 import LeaderboardModal from "./components/LeaderboardModal";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
-import { WS_URL } from "./config";
+import { API_URL, WS_URL } from "./config";
 import type { CardRef, IdleBattleOption } from "./protocol";
 
 const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place", "chain"]);
@@ -124,6 +124,18 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [restart]);
+
+  // Manual, rarely-used escape hatch (see backend/server.py's /notice) --
+  // fetched once on load rather than polled, since this is meant for "heads
+  // up before you start" (e.g. bracing for a reset-time rush), not a live
+  // status indicator that needs to update mid-session.
+  const [siteNotice, setSiteNotice] = useState<string | null>(null);
+  useEffect(() => {
+    fetch(`${API_URL}/notice`)
+      .then((res) => res.json())
+      .then((data) => setSiteNotice(data.message ?? null))
+      .catch(() => {});
+  }, []);
 
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -485,6 +497,8 @@ export default function App() {
       </div>
 
       {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
+
+      {siteNotice && <div className="notice-banner">{siteNotice}</div>}
 
       {error ? (
         <div className="error-banner">

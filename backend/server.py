@@ -76,6 +76,17 @@ def list_puzzles():
     return {"today": puzzle_registry.today_str(), "dates": puzzle_registry.available_dates()}
 
 
+@app.get("/notice")
+def notice():
+    # A manual, low-tech escape hatch for "heads up, we're under heavier
+    # load than expected" -- e.g. a rush of players right at the daily
+    # puzzle reset. Deliberately just an env var rather than a live-editable
+    # config store: this is a rare fallback, not something that needs
+    # instant toggling, so a ~1-2 min Render redeploy to pick up a change is
+    # an acceptable tradeoff for not adding a whole config system for it.
+    return {"message": os.environ.get("SITE_NOTICE") or None}
+
+
 @app.get("/leaderboard/today")
 async def leaderboard_today(date: str | None = None):
     resolved_date, _ = puzzle_registry.resolve_puzzle_for(date)
