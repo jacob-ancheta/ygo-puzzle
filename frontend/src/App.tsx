@@ -10,6 +10,7 @@ import CardDetailPanel from "./components/CardDetailPanel";
 import CardTile from "./components/CardTile";
 import AuthPanel from "./components/AuthPanel";
 import LeaderboardModal from "./components/LeaderboardModal";
+import WinModal from "./components/WinModal";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { API_URL, WS_URL } from "./config";
@@ -138,6 +139,20 @@ export default function App() {
   }, []);
 
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+
+  // Symmetric open/close (not "open once, dismiss manually") so a restart
+  // -- which resets board.status back to "playing" -- automatically
+  // retracts a stale modal with no extra plumbing at the restart/connect
+  // call sites, matching how noticeQueue/consumedNoticesRef already detect
+  // "board was reset for a new attempt" elsewhere in this file.
+  const [showWinModal, setShowWinModal] = useState(false);
+  const wasPlayerWinRef = useRef(false);
+  useEffect(() => {
+    const isPlayerWin = board.status === "win" && board.playerWon === true;
+    if (isPlayerWin !== wasPlayerWinRef.current) setShowWinModal(isPlayerWin);
+    wasPlayerWinRef.current = isPlayerWin;
+  }, [board.status, board.playerWon]);
+
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmState | null>(null);
   const [selection, setSelection] = useState<number[]>([]);
@@ -503,6 +518,14 @@ export default function App() {
       </div>
 
       {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
+
+      {showWinModal && (
+        <WinModal
+          winSummary={board.winSummary}
+          communityPosition={board.communityPosition}
+          onClose={() => setShowWinModal(false)}
+        />
+      )}
 
       {siteNotice && <div className="notice-banner">{siteNotice}</div>}
 

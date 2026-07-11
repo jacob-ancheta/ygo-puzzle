@@ -159,15 +159,37 @@ async def duel_socket(websocket: WebSocket):
                                             "message": "no more messages from the engine"})
                 break
 
-            if (user_id is not None and item.get("type") == "event"
-                    and item.get("event") == "win" and item.get("winner") == 0):
+            if item.get("type") == "event" and item.get("event") == "win" and item.get("winner") == 0:
+                # Community count: unconditional, every win regardless of
+                # sign-in status. Deliberately not dedupe-safe (see
+                # leaderboard.record_completion's own docstring) -- shown as
+                # a rough stat to anonymous players only, never fed into the
+                # real leaderboard below.
+                community_position = None
                 try:
-                    await leaderboard.record_win(user_id, resolved_date)
+                    community_position = await leaderboard.record_completion(resolved_date)
                 except Exception as e:
-                    # Logged, not raised: a Supabase hiccup must never break
-                    # the player's duel, but a silently swallowed failure
-                    # here was previously undiagnosable from Render's logs.
-                    print(f"[duel_socket] record_win failed for user_id={user_id!r} date={resolved_date!r}: {e!r}")
+                    print(f"[duel_socket] record_completion failed for date={resolved_date!r}: {e!r}")
+                item["community_position"] = community_position
+
+                # The real, tamper-resistant leaderboard -- only for
+                # signed-in connections.
+                result = None
+                if user_id is not None:
+                    try:
+                        result = await leaderboard.record_win(user_id, resolved_date)
+                    except Exception as e:
+                        # Logged, not raised: a Supabase hiccup must never break
+                        # the player's duel, but a silently swallowed failure
+                        # here was previously undiagnosable from Render's logs.
+                        print(f"[duel_socket] record_win failed for user_id={user_id!r} date={resolved_date!r}: {e!r}")
+                # Always an explicit key (null on failure/anonymous), never
+                # omitted -- gives the frontend one consistent shape to check
+                # instead of having to distinguish "key missing" from "no data".
+                item["leaderboard"] = (
+                    {"rank": result["assigned_rank"], "overall_position": result["overall_position"]}
+                    if result else None
+                )
 
             await websocket.send_json(item)
             if item["type"] == "prompt":

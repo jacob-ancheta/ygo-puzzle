@@ -40,6 +40,22 @@ export interface BoardState {
   banished: { 0: ZoneCard[]; 1: ZoneCard[] };
   status: "playing" | "win" | "loss" | "ended";
   statusMessage: string;
+  // Only meaningful once status === "win" -- the "win" event fires for
+  // either side (server.py/duel_engine.py's MSG_WIN carries whichever
+  // player actually won), so this disambiguates "you won" from "the
+  // opponent won" for anything that should only react to the former (e.g.
+  // the win modal/leaderboard recording).
+  playerWon?: boolean;
+  // Only set when playerWon is true. undefined = not a player win yet;
+  // null = signed-in-eligible win but no leaderboard data (anonymous
+  // player, or the backend's record_win call failed) -- both cases show a
+  // congrats-only modal with no rank/position.
+  winSummary?: { rank: number | null; overall_position: number | null } | null;
+  // A rough "X people have solved this" count, set whenever playerWon is
+  // true regardless of sign-in status -- not tamper-resistant (see
+  // server.py's record_completion), so only ever used as a fallback
+  // display for anonymous players, never as the real leaderboard position.
+  communityPosition?: number | null;
   // The card whose effect is currently resolving on the chain, if any --
   // generic yes/no prompts (MSG_SELECT_YESNO) carry no card reference of
   // their own, so this is the best available hint for "what is this asking
@@ -357,8 +373,22 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
     case "chain_end":
       return { ...board, currentChainCard: undefined, currentChainLocation: undefined, currentChainLink: undefined };
 
-    case "win":
-      return { ...board, status: "win", statusMessage: item.winner === 0 ? "You win!" : "Opponent wins." };
+    case "win": {
+      const isPlayerWin = item.winner === 0;
+      const lb = item.leaderboard as { rank: number | null; overall_position: number | null } | null | undefined;
+      return {
+        ...board,
+        status: "win",
+        statusMessage: isPlayerWin ? "You win!" : "Opponent wins.",
+        playerWon: isPlayerWin,
+        winSummary: isPlayerWin ? (lb ?? null) : undefined,
+        // Separate from winSummary -- a rough "X people have solved this"
+        // count, not tamper-resistant (no dedup for anonymous replays), so
+        // it's only ever a fallback for display when there's no real
+        // (signed-in) position.
+        communityPosition: isPlayerWin ? ((item.community_position as number | null | undefined) ?? null) : undefined,
+      };
+    }
 
     case "loss":
       return { ...board, status: "loss", statusMessage: (item.message as string) ?? "Puzzle not solved." };
@@ -366,6 +396,11 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
     case "duel_ended":
     case "unsupported":
     case "unhandled":
+      // The server always sends duel_ended right after win/loss (the
+      // generator naturally exhausting is just the next step once a duel
+      // is decided) -- without this guard it silently clobbered the real
+      // result with "no more messages from the engine" every single time.
+      if (board.status === "win" || board.status === "loss") return board;
       return { ...board, status: "ended", statusMessage: (item.message as string) ?? event };
 
     default:
