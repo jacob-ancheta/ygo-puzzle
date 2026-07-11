@@ -1,7 +1,7 @@
-# Proves the actual unknown in the deploy roadmap: does ygopro-core (the
-# ctypes duel engine) + its Lua card scripts build and run on Linux at all.
-# Scoped to the backend only for now -- no frontend, no card image serving --
-# since that's the whole question this stage of the roadmap needs answered.
+# Backend-only image (frontend is a separate static Vite build, deployed to
+# Vercel rather than served from here). Proves the actual unknown in the
+# deploy roadmap: does ygopro-core (the ctypes duel engine) + its Lua card
+# scripts build and run on Linux at all.
 #
 # Both stages deliberately share the same base image (python:3.14-slim) so
 # the shared library built in the first stage links against the exact same
@@ -86,6 +86,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/*.py /app/backend/
 COPY backend/cards.db /app/backend/cards.db
 COPY backend/puzzles /app/backend/puzzles
+COPY backend/card_images /app/backend/card_images
 
 RUN printf '%s\n' \
     'MINGW_BIN = ""' \

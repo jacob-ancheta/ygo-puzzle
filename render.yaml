@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ygo-puzzle-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false

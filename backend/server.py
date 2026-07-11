@@ -22,6 +22,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from websockets.exceptions import WebSocketException
 
@@ -29,6 +30,25 @@ import puzzle_registry
 from duel_engine import DuelEngine, DuelEnded, PuzzleLoadError, run, initial_board_state
 
 app = FastAPI()
+
+# Frontend is deployed separately (Vercel) from this backend (Render), so
+# browser fetch() calls to /puzzles and / are cross-origin and need explicit
+# CORS. Comma-separated so the Render env var can list both the production
+# Vercel domain and any preview-deploy domains; local Vite dev origin is
+# always allowed since it costs nothing and never applies in production.
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", _default_origins).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
 ENGINE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ygo-engine")
 
 CARD_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "card_images")
