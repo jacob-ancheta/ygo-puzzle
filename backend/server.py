@@ -25,8 +25,10 @@ from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from websockets.exceptions import WebSocketException
 
+import claim_token
 import leaderboard
 import puzzle_registry
 from auth import verify_supabase_jwt
@@ -48,7 +50,7 @@ ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -102,6 +104,32 @@ async def profile_me(authorization: str = Header(default="")):
         return JSONResponse({"error": "not signed in"}, status_code=401)
     profile = await leaderboard.get_profile(user_id)
     return profile or {"error": "profile not found"}
+
+
+class ClaimWinRequest(BaseModel):
+    token: str
+
+
+@app.post("/claim-win")
+async def claim_win(body: ClaimWinRequest, authorization: str = Header(default="")):
+    """Lets a player who won anonymously and *then* signed in retroactively
+    claim their leaderboard spot, without replaying the puzzle -- see
+    WinModal's "Sign In" button and claim_token.py for why this needs a
+    signed token rather than trusting a client-supplied date."""
+    access_token = authorization.removeprefix("Bearer ").strip()
+    user_id = await verify_supabase_jwt(access_token)
+    if user_id is None:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    puzzle_date = claim_token.verify_claim_token(body.token)
+    if puzzle_date is None:
+        return JSONResponse({"error": "invalid or expired claim"}, status_code=400)
+    result = await leaderboard.record_win(user_id, puzzle_date)
+    return {
+        "leaderboard": (
+            {"rank": result["assigned_rank"], "overall_position": result["overall_position"]}
+            if result else None
+        ),
+    }
 
 
 @app.websocket("/ws")
@@ -199,6 +227,12 @@ async def duel_socket(websocket: WebSocket):
                     {"rank": result["assigned_rank"], "overall_position": result["overall_position"]}
                     if result else None
                 )
+                # Lets an anonymous winner claim this exact win later, after
+                # signing in, without replaying the puzzle -- see
+                # claim_token.py. None (and the frontend just won't offer the
+                # claim path) if CLAIM_TOKEN_SECRET isn't configured, or if
+                # this connection was already signed in and doesn't need it.
+                item["claim_token"] = claim_token.make_claim_token(resolved_date) if user_id is None else None
 
             await websocket.send_json(item)
             if item["type"] == "prompt":
