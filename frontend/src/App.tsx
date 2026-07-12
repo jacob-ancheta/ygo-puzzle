@@ -9,6 +9,7 @@ import SelectionBar from "./components/SelectionBar";
 import CardDetailPanel from "./components/CardDetailPanel";
 import CardTile from "./components/CardTile";
 import AuthPanel from "./components/AuthPanel";
+import ResetCountdown from "./components/ResetCountdown";
 import LeaderboardModal from "./components/LeaderboardModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { nonCardOptions } from "./interaction";
@@ -543,6 +544,7 @@ export default function App() {
           <span className={`dot ${connected ? "connected" : "disconnected"}`} />
           {connected ? "Connected" : "Disconnected"}
         </div>
+        <ResetCountdown />
         <AuthPanel user={user} accessToken={session?.access_token} signInWithEmail={signInWithEmail} signOut={signOut} />
       </header>
 

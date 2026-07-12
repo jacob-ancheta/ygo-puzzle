@@ -1,4 +1,5 @@
 import { useTodayLeaderboard } from "../useTodayLeaderboard";
+import LeaderboardList from "./LeaderboardList";
 
 interface Props {
   onClose: () => void;
@@ -7,8 +8,6 @@ interface Props {
 export default function LeaderboardModal({ onClose }: Props) {
   const { rows, puzzleDate, error } = useTodayLeaderboard();
 
-  const medal = (rank: number) => (rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`);
-
   return (
     <div className="modal-backdrop">
       <div className="modal">
@@ -16,15 +15,7 @@ export default function LeaderboardModal({ onClose }: Props) {
         {error && <p className="error-banner">{error}</p>}
         {!error && rows === null && <p>Loading...</p>}
         {!error && rows !== null && rows.length === 0 && <p>Nobody's solved today's puzzle yet -- be the first!</p>}
-        {!error && rows !== null && rows.length > 0 && (
-          <ul className="modal-list">
-            {rows.map((row) => (
-              <li key={row.rank}>
-                {medal(row.rank)} {row.profiles?.display_name ?? "unknown"}
-              </li>
-            ))}
-          </ul>
-        )}
+        {!error && rows !== null && rows.length > 0 && <LeaderboardList rows={rows} />}
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Close</button>
         </div>

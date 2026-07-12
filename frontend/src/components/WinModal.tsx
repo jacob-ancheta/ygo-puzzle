@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTodayLeaderboard } from "../useTodayLeaderboard";
 import SignInForm from "./SignInForm";
+import LeaderboardList from "./LeaderboardList";
 
 export interface WinSummary {
   rank: number | null;
@@ -33,8 +34,6 @@ export function ordinal(n: number): string {
     default: return `${n}th`;
   }
 }
-
-const medal = (rank: number) => (rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`);
 
 export default function WinModal({ winSummary, communityPosition, claimToken, signInWithEmail, onClose }: Props) {
   const { rows, error } = useTodayLeaderboard();
@@ -88,15 +87,7 @@ export default function WinModal({ winSummary, communityPosition, claimToken, si
             {error && <p className="error-banner">{error}</p>}
             {!error && rows === null && <p>Loading...</p>}
             {!error && rows !== null && rows.length === 0 && <p>You're the first today!</p>}
-            {!error && rows !== null && rows.length > 0 && (
-              <ul className="modal-list">
-                {rows.map((row) => (
-                  <li key={row.rank}>
-                    {medal(row.rank)} {row.profiles?.display_name ?? "unknown"}
-                  </li>
-                ))}
-              </ul>
-            )}
+            {!error && rows !== null && rows.length > 0 && <LeaderboardList rows={rows} />}
           </div>
 
           <div className="win-modal-column">
