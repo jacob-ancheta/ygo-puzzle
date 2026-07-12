@@ -48,8 +48,12 @@ export default function WinModal({ winSummary, communityPosition, puzzleDate, cl
   // trip. App.tsx picks this back up once `user` resolves after the reload
   // and posts it to /claim-win, without replaying the puzzle.
   function stashPendingClaim() {
-    if (!puzzleDate || !claimToken) return;
+    // TEMPORARY diagnostic logging -- remove once the claim-flow bug is
+    // pinned down.
+    console.log("[claim] stashPendingClaim called, puzzleDate:", puzzleDate, "claimToken:", claimToken);
+    if (!puzzleDate || !claimToken) { console.log("[claim] missing puzzleDate or claimToken, not stashing"); return; }
     localStorage.setItem(PENDING_CLAIM_KEY, JSON.stringify({ date: puzzleDate, token: claimToken }));
+    console.log("[claim] stashed to localStorage:", localStorage.getItem(PENDING_CLAIM_KEY));
   }
 
   // Real (signed-in, tamper-resistant) position takes priority; the rough
