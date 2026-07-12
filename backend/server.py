@@ -20,6 +20,7 @@ handler or on the default (multi-worker) executor:
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
+from typing import Literal
 
 from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,7 @@ from pydantic import BaseModel
 from websockets.exceptions import WebSocketException
 
 import claim_token
+import feedback
 import leaderboard
 import puzzle_registry
 from auth import verify_supabase_jwt
@@ -130,6 +132,33 @@ async def claim_win(body: ClaimWinRequest, authorization: str = Header(default="
             if result else None
         ),
     }
+
+
+class FeedbackRequest(BaseModel):
+    kind: Literal["bug", "suggestion"]
+    message: str
+    contact_email: str | None = None
+
+
+MAX_FEEDBACK_LENGTH = 4000
+
+
+@app.post("/feedback")
+async def submit_feedback(body: FeedbackRequest):
+    message = body.message.strip()
+    if not message or len(message) > MAX_FEEDBACK_LENGTH:
+        return JSONResponse(
+            {"error": f"message must be non-empty and under {MAX_FEEDBACK_LENGTH} characters"},
+            status_code=400,
+        )
+    contact_email = body.contact_email.strip() if body.contact_email else None
+    sent = await feedback.send_feedback_email(body.kind, message, contact_email)
+    if not sent:
+        # Not configured yet (missing RESEND_API_KEY/FEEDBACK_TO_EMAIL) --
+        # a real 5xx rather than pretending it worked, so the frontend can
+        # tell the player their message didn't actually go anywhere.
+        return JSONResponse({"error": "feedback isn't set up on the server yet"}, status_code=503)
+    return {"ok": True}
 
 
 @app.websocket("/ws")
