@@ -1016,6 +1016,20 @@
   font-size: 13px;
 }
 
+textarea.text-input {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.feedback-kind-toggle {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.feedback-contact-email {
+  margin-top: 8px;
+}
+
 .counter-row {
   display: flex;
   align-items: center;

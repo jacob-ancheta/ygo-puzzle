@@ -11,6 +11,7 @@ import CardTile from "./components/CardTile";
 import AuthPanel from "./components/AuthPanel";
 import ResetCountdown from "./components/ResetCountdown";
 import LeaderboardModal from "./components/LeaderboardModal";
+import FeedbackModal from "./components/FeedbackModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
@@ -189,6 +190,7 @@ export default function App() {
   }, []);
 
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   // Symmetric open/close (not "open once, dismiss manually") so a restart
   // -- which resets board.status back to "playing" -- automatically
@@ -566,9 +568,15 @@ export default function App() {
         <button className="btn small" onClick={() => setShowLeaderboard(true)} title="Today's top solvers">
           Leaderboard
         </button>
+
+        <button className="btn small" onClick={() => setShowFeedback(true)} title="Report a bug or suggest a puzzle">
+          Feedback
+        </button>
       </div>
 
       {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
+
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
 
       {showWinModal && (
         <WinModal
