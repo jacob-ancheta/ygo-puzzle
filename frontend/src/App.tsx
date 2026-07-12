@@ -113,18 +113,25 @@ export default function App() {
   const claimAttemptedRef = useRef(false);
   const [claimResult, setClaimResult] = useState<{ position: number } | { error: string } | null>(null);
   useEffect(() => {
-    if (claimAttemptedRef.current) return;
+    // TEMPORARY diagnostic logging -- remove once the claim-flow bug is
+    // pinned down. Open DevTools console right after landing back from the
+    // magic-link email and report what's printed here.
+    console.log("[claim] effect fired, session:", session ? "present" : "null", "hasToken:", Boolean(session?.access_token));
+    if (claimAttemptedRef.current) { console.log("[claim] already attempted, skipping"); return; }
     const raw = localStorage.getItem(PENDING_CLAIM_KEY);
+    console.log("[claim] pending claim in localStorage:", raw);
     if (!raw) return;
-    if (!session?.access_token) return;
+    if (!session?.access_token) { console.log("[claim] have a pending claim but no session token yet, waiting"); return; }
     claimAttemptedRef.current = true;
     localStorage.removeItem(PENDING_CLAIM_KEY);
     let pending: { date: string; token: string };
     try {
       pending = JSON.parse(raw);
-    } catch {
+    } catch (e) {
+      console.log("[claim] failed to parse pending claim JSON:", e);
       return;
     }
+    console.log("[claim] posting to /claim-win", pending);
     fetch(`${API_URL}/claim-win`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
@@ -132,6 +139,7 @@ export default function App() {
     })
       .then(async (res) => {
         const data = await res.json();
+        console.log("[claim] response:", res.status, data);
         const pos = data.leaderboard?.overall_position;
         if (res.ok && pos != null) {
           setClaimResult({ position: pos });
@@ -143,7 +151,10 @@ export default function App() {
           setClaimResult({ error: data.error ?? "Couldn't save your win." });
         }
       })
-      .catch(() => setClaimResult({ error: "Couldn't reach the server to save your win." }));
+      .catch((e) => {
+        console.log("[claim] fetch threw:", e);
+        setClaimResult({ error: "Couldn't reach the server to save your win." });
+      });
   }, [session]);
 
   // A restart isn't free server-side (a fresh native duel object, a new
