@@ -10,7 +10,7 @@ import CardDetailPanel from "./components/CardDetailPanel";
 import CardTile from "./components/CardTile";
 import AuthPanel from "./components/AuthPanel";
 import LeaderboardModal from "./components/LeaderboardModal";
-import WinModal, { ordinal, PENDING_CLAIM_KEY } from "./components/WinModal";
+import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { API_URL, WS_URL } from "./config";
@@ -96,50 +96,41 @@ export default function App() {
     if (justSignedIn) connect();
   }, [user, connect]);
 
-  // If WinModal's "Sign In" button stashed a pending claim before the
-  // magic-link redirect (see PENDING_CLAIM_KEY), redeem it here -- a plain
-  // POST, entirely independent of the duel socket/reconnect effect above:
-  // the win already happened server-side, so there's nothing to replay.
+  // WinModal's "Sign In" button embeds the claim token directly in the
+  // magic-link's redirect URL (see WinModal.tsx's signInAndCarryClaim) --
+  // read it back here and redeem it. A plain POST, entirely independent of
+  // the duel socket/reconnect effect above: the win already happened
+  // server-side, so there's nothing to replay.
   //
   // Deliberately its own effect keyed only on `session`, not bundled into
   // the justSignedIn transition above: that effect fires exactly once, the
   // instant `user` flips from null, and `session` isn't guaranteed to carry
   // a populated access_token in that very same tick during magic-link
-  // redirect hydration. Bundling this in meant a claim could be silently
-  // dropped forever if session lagged `user` by even one render -- this
-  // version just keeps checking on every session change (guarded by
-  // claimAttemptedRef so it only ever actually fires once) until a token
-  // shows up.
+  // redirect hydration. This version just keeps checking on every session
+  // change (guarded by claimAttemptedRef so it only ever actually fires
+  // once) until a token shows up.
   const claimAttemptedRef = useRef(false);
   const [claimResult, setClaimResult] = useState<{ position: number } | { error: string } | null>(null);
   useEffect(() => {
-    // TEMPORARY diagnostic logging -- remove once the claim-flow bug is
-    // pinned down. Open DevTools console right after landing back from the
-    // magic-link email and report what's printed here.
-    console.log("[claim] effect fired, session:", session ? "present" : "null", "hasToken:", Boolean(session?.access_token));
-    if (claimAttemptedRef.current) { console.log("[claim] already attempted, skipping"); return; }
-    const raw = localStorage.getItem(PENDING_CLAIM_KEY);
-    console.log("[claim] pending claim in localStorage:", raw);
-    if (!raw) return;
-    if (!session?.access_token) { console.log("[claim] have a pending claim but no session token yet, waiting"); return; }
+    if (claimAttemptedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get(CLAIM_QUERY_PARAM);
+    if (!token) return;
+    if (!session?.access_token) return;
     claimAttemptedRef.current = true;
-    localStorage.removeItem(PENDING_CLAIM_KEY);
-    let pending: { date: string; token: string };
-    try {
-      pending = JSON.parse(raw);
-    } catch (e) {
-      console.log("[claim] failed to parse pending claim JSON:", e);
-      return;
-    }
-    console.log("[claim] posting to /claim-win", pending);
+    // Drop the token from the URL/history now that we've read it, rather
+    // than leaving it sitting there (visible, re-submittable on refresh).
+    params.delete(CLAIM_QUERY_PARAM);
+    const cleanedSearch = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (cleanedSearch ? `?${cleanedSearch}` : ""));
+
     fetch(`${API_URL}/claim-win`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ token: pending.token }),
+      body: JSON.stringify({ token }),
     })
       .then(async (res) => {
         const data = await res.json();
-        console.log("[claim] response:", res.status, data);
         const pos = data.leaderboard?.overall_position;
         if (res.ok && pos != null) {
           setClaimResult({ position: pos });
@@ -151,10 +142,7 @@ export default function App() {
           setClaimResult({ error: data.error ?? "Couldn't save your win." });
         }
       })
-      .catch((e) => {
-        console.log("[claim] fetch threw:", e);
-        setClaimResult({ error: "Couldn't reach the server to save your win." });
-      });
+      .catch(() => setClaimResult({ error: "Couldn't reach the server to save your win." }));
   }, [session]);
 
   // A restart isn't free server-side (a fresh native duel object, a new
@@ -584,7 +572,6 @@ export default function App() {
         <WinModal
           winSummary={board.winSummary}
           communityPosition={board.communityPosition}
-          puzzleDate={board.puzzleDate}
           claimToken={board.claimToken}
           signInWithEmail={signInWithEmail}
           onClose={() => setShowWinModal(false)}

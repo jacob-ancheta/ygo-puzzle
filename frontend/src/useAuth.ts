@@ -20,10 +20,18 @@ export function useAuth() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  const signInWithEmail = useCallback(async (email: string) => {
+  // redirectTo lets a caller (WinModal's claim flow) send the player back
+  // to a URL carrying extra state -- see PENDING_CLAIM_KEY's replacement in
+  // App.tsx/WinModal.tsx, which encodes the claim token as a query param
+  // rather than localStorage: the magic link is often opened in a
+  // different browser/app than the one that requested it (an email
+  // client's in-app browser, most commonly), which doesn't share
+  // localStorage with wherever signInWithEmail was originally called from.
+  // A query param travels with the link itself, so it survives regardless.
+  const signInWithEmail = useCallback(async (email: string, redirectTo?: string) => {
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: window.location.origin },
+      options: { emailRedirectTo: redirectTo ?? window.location.origin },
     });
     return error?.message ?? null;
   }, []);
