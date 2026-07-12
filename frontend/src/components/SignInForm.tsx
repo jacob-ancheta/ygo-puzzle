@@ -2,24 +2,18 @@ import { useState } from "react";
 
 interface Props {
   signInWithEmail: (email: string) => Promise<string | null>;
-  // Called right before the magic-link email actually sends -- WinModal
-  // uses this to stash a pending win-claim into localStorage first, since
-  // the magic-link redirect is a full page reload that would otherwise lose
-  // it (see App.tsx's claim-on-sign-in effect).
-  onBeforeSend?: () => void;
   // Optional secondary action rendered alongside "Send magic link" in the
   // same row (rather than each caller having to add its own separate
   // modal-actions block below this one) -- AuthPanel uses this for "Close".
   onClose?: () => void;
 }
 
-export default function SignInForm({ signInWithEmail, onBeforeSend, onClose }: Props) {
+export default function SignInForm({ signInWithEmail, onClose }: Props) {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   async function handleSend() {
-    onBeforeSend?.();
     setStatus("sending");
     setErrorMessage(null);
     const err = await signInWithEmail(email);

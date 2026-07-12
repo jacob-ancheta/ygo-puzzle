@@ -56,10 +56,6 @@ export interface BoardState {
   // server.py's record_completion), so only ever used as a fallback
   // display for anonymous players, never as the real leaderboard position.
   communityPosition?: number | null;
-  // Set from the "puzzle_loaded" event, which always arrives before
-  // "board_state" resets the rest of this object -- carried forward across
-  // that reset in the "board_state" case below rather than lost with it.
-  puzzleDate?: string;
   // Only set alongside winSummary when this was an anonymous win -- lets
   // WinModal's "Sign In" button retroactively claim the spot later without
   // replaying the puzzle. null once already signed in (record_win already
@@ -245,12 +241,8 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
   const event = item.event as string;
 
   switch (event) {
-    case "puzzle_loaded":
-      return { ...board, puzzleDate: item.date as string };
-
     case "board_state": {
       let b = createInitialBoard();
-      b.puzzleDate = board.puzzleDate;
       const lp = item.lp as { player: number; opponent: number };
       b.lp = { 0: lp.player, 1: lp.opponent };
       const opponentField = item.opponent_field as { card: CardRef; zone: number; position: string }[];
