@@ -90,7 +90,7 @@ export default function App() {
   // won got no puzzle_results row because their whole duel had actually run
   // on the pre-sign-in anonymous connection.
   const wasSignedInRef = useRef(false);
-  const [claimResult, setClaimResult] = useState<{ position: number } | null>(null);
+  const [claimResult, setClaimResult] = useState<{ position: number } | { error: string } | null>(null);
   useEffect(() => {
     const justSignedIn = !wasSignedInRef.current && user !== null;
     wasSignedInRef.current = user !== null;
@@ -115,12 +115,20 @@ export default function App() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ token: pending.token }),
     })
-      .then((res) => res.json())
-      .then((data) => {
+      .then(async (res) => {
+        const data = await res.json();
         const pos = data.leaderboard?.overall_position;
-        if (pos != null) setClaimResult({ position: pos });
+        if (res.ok && pos != null) {
+          setClaimResult({ position: pos });
+        } else {
+          // Expired/already-claimed token, or a signed-in win somehow with
+          // no overall_position -- either way, this used to fail silently
+          // with no feedback at all, which looked identical to "nothing
+          // happened" from a successful no-op.
+          setClaimResult({ error: data.error ?? "Couldn't save your win." });
+        }
       })
-      .catch(() => {});
+      .catch(() => setClaimResult({ error: "Couldn't reach the server to save your win." }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, connect, session]);
 
@@ -561,8 +569,17 @@ export default function App() {
       {claimResult && (
         <div className="modal-backdrop">
           <div className="modal">
-            <h3>🎉 Win saved!</h3>
-            <p>You finished {ordinal(claimResult.position)} today.</p>
+            {"position" in claimResult ? (
+              <>
+                <h3>🎉 Win saved!</h3>
+                <p>You finished {ordinal(claimResult.position)} today.</p>
+              </>
+            ) : (
+              <>
+                <h3>Couldn't save your win</h3>
+                <p className="error-banner">{claimResult.error}</p>
+              </>
+            )}
             <div className="modal-actions">
               <button className="btn primary" onClick={() => setClaimResult(null)}>Close</button>
             </div>

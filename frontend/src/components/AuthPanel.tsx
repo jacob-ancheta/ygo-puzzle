@@ -23,6 +23,11 @@ interface Props {
 export default function AuthPanel({ user, accessToken, signInWithEmail, signOut }: Props) {
   const [showSignIn, setShowSignIn] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
+  // Distinguishes "haven't fetched yet" from "fetched, but this signed-in
+  // account has no profile row" -- previously both silently rendered as
+  // nothing at all, indistinguishable from a fresh signup with no visible
+  // error either way.
+  const [profileMissing, setProfileMissing] = useState(false);
 
   const [showRename, setShowRename] = useState(false);
   const [newName, setNewName] = useState("");
@@ -30,12 +35,17 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
   const [renameError, setRenameError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!accessToken) { setProfile(null); return; }
+    if (!accessToken) { setProfile(null); setProfileMissing(false); return; }
     let cancelled = false;
+    setProfileMissing(false);
     fetch(`${API_URL}/profile/me`, { headers: { Authorization: `Bearer ${accessToken}` } })
       .then((res) => res.json())
-      .then((data) => { if (!cancelled && !data.error) setProfile(data); })
-      .catch(() => {});
+      .then((data) => {
+        if (cancelled) return;
+        if (data.error) { setProfileMissing(true); return; }
+        setProfile(data);
+      })
+      .catch(() => { if (!cancelled) setProfileMissing(true); });
     return () => { cancelled = true; };
   }, [accessToken]);
 
@@ -87,6 +97,11 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
                 🥇{profile.first_count} 🥈{profile.second_count} 🥉{profile.third_count}
               </span>
             </>
+          )}
+          {profileMissing && (
+            <span className="dim" title="Signed in, but no profile row was found for this account -- try refreshing, or contact support if this persists.">
+              Signed in (profile unavailable)
+            </span>
           )}
           <button className="btn small" onClick={() => signOut()}>
             Sign out
