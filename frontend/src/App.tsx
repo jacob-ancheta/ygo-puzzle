@@ -90,19 +90,34 @@ export default function App() {
   // won got no puzzle_results row because their whole duel had actually run
   // on the pre-sign-in anonymous connection.
   const wasSignedInRef = useRef(false);
-  const [claimResult, setClaimResult] = useState<{ position: number } | { error: string } | null>(null);
   useEffect(() => {
     const justSignedIn = !wasSignedInRef.current && user !== null;
     wasSignedInRef.current = user !== null;
-    if (!justSignedIn) return;
-    connect();
+    if (justSignedIn) connect();
+  }, [user, connect]);
 
-    // If WinModal's "Sign In" button stashed a pending claim before the
-    // magic-link redirect (see PENDING_CLAIM_KEY), redeem it here -- a plain
-    // POST, entirely independent of the duel socket above: the win already
-    // happened server-side, so there's nothing to replay.
+  // If WinModal's "Sign In" button stashed a pending claim before the
+  // magic-link redirect (see PENDING_CLAIM_KEY), redeem it here -- a plain
+  // POST, entirely independent of the duel socket/reconnect effect above:
+  // the win already happened server-side, so there's nothing to replay.
+  //
+  // Deliberately its own effect keyed only on `session`, not bundled into
+  // the justSignedIn transition above: that effect fires exactly once, the
+  // instant `user` flips from null, and `session` isn't guaranteed to carry
+  // a populated access_token in that very same tick during magic-link
+  // redirect hydration. Bundling this in meant a claim could be silently
+  // dropped forever if session lagged `user` by even one render -- this
+  // version just keeps checking on every session change (guarded by
+  // claimAttemptedRef so it only ever actually fires once) until a token
+  // shows up.
+  const claimAttemptedRef = useRef(false);
+  const [claimResult, setClaimResult] = useState<{ position: number } | { error: string } | null>(null);
+  useEffect(() => {
+    if (claimAttemptedRef.current) return;
     const raw = localStorage.getItem(PENDING_CLAIM_KEY);
-    if (!raw || !session?.access_token) return;
+    if (!raw) return;
+    if (!session?.access_token) return;
+    claimAttemptedRef.current = true;
     localStorage.removeItem(PENDING_CLAIM_KEY);
     let pending: { date: string; token: string };
     try {
@@ -129,8 +144,7 @@ export default function App() {
         }
       })
       .catch(() => setClaimResult({ error: "Couldn't reach the server to save your win." }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, connect, session]);
+  }, [session]);
 
   // A restart isn't free server-side (a fresh native duel object, a new
   // shuffle/deal, an initial phase resolution -- all serialized behind
