@@ -4,7 +4,12 @@ import { API_URL } from "./config";
 export interface LeaderboardRow {
   rank: number;
   solved_at: string;
-  profiles: { display_name: string } | null;
+  profiles: {
+    display_name: string;
+    first_count: number;
+    second_count: number;
+    third_count: number;
+  } | null;
 }
 
 export function useTodayLeaderboard() {

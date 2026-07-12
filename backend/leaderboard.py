@@ -79,7 +79,7 @@ async def today_leaderboard(puzzle_date: str) -> list[dict]:
             params={
                 "puzzle_date": f"eq.{puzzle_date}",
                 "rank": "not.is.null",
-                "select": "rank,solved_at,profiles(display_name)",
+                "select": "rank,solved_at,profiles(display_name,first_count,second_count,third_count)",
                 "order": "rank.asc",
             },
         )

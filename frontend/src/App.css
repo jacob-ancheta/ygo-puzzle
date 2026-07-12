@@ -56,6 +56,12 @@
   color: var(--ink-300);
 }
 
+.reset-countdown {
+  font-size: 13px;
+  color: var(--ink-300);
+  white-space: nowrap;
+}
+
 .dot {
   width: 8px;
   height: 8px;
@@ -1063,6 +1069,16 @@
   padding: 6px 10px;
   border-radius: 6px;
   background: var(--ink-800);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.leaderboard-row-medals {
+  font-size: 12px;
+  color: var(--ink-300);
+  white-space: nowrap;
 }
 
 .notice-banner {
@@ -1141,6 +1157,7 @@
   .app-header { padding: 4px 10px; }
   .app-header h1 { font-size: 13px; }
   .connection-status { font-size: 11px; }
+  .reset-countdown { font-size: 11px; }
   .app-main { padding: 4px 6px; }
   .board { padding: 4px 6px; gap: 4px; }
 
