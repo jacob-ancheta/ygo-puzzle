@@ -18,10 +18,12 @@ FEEDBACK_TO_EMAIL = os.environ.get("FEEDBACK_TO_EMAIL")
 
 
 async def send_feedback_email(kind: str, message: str, contact_email: str | None) -> bool:
-    """Returns whether the email actually sent -- False (not raised) if
-    Resend isn't configured yet, matching this codebase's convention
-    elsewhere of a missing-config feature quietly no-opping rather than
-    breaking the request."""
+    """Returns whether the email actually sent -- False if Resend isn't
+    configured yet, matching this codebase's convention elsewhere of a
+    missing-config feature quietly no-opping rather than breaking the
+    request. A Resend API error (bad key, unverified from-domain, etc.) is
+    NOT swallowed here -- it propagates so the caller (server.py) can log
+    the real reason, same pattern as leaderboard.py's calls."""
     if not RESEND_API_KEY or not FEEDBACK_TO_EMAIL:
         return False
     subject = f"[Duel Puzzdle] {'Bug report' if kind == 'bug' else 'Puzzle suggestion'}"

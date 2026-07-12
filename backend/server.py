@@ -152,7 +152,15 @@ async def submit_feedback(body: FeedbackRequest):
             status_code=400,
         )
     contact_email = body.contact_email.strip() if body.contact_email else None
-    sent = await feedback.send_feedback_email(body.kind, message, contact_email)
+    try:
+        sent = await feedback.send_feedback_email(body.kind, message, contact_email)
+    except Exception as e:
+        # Logged, not raised as a bare 500: a Resend rejection (bad key,
+        # unverified from-domain, etc.) needs to be diagnosable from
+        # Render's logs, and the player still deserves a real error instead
+        # of an opaque "Internal Server Error" with no detail at all.
+        print(f"[feedback] send_feedback_email failed: {e!r}")
+        return JSONResponse({"error": "couldn't send that -- try again in a bit"}, status_code=502)
     if not sent:
         # Not configured yet (missing RESEND_API_KEY/FEEDBACK_TO_EMAIL) --
         # a real 5xx rather than pretending it worked, so the frontend can
