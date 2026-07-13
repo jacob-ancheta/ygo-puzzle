@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { API_URL } from "../config";
-import { supabase } from "../supabaseClient";
-import SignInForm from "./SignInForm";
+import SignInForm, { MAX_USERNAME_LENGTH, USERNAME_QUERY_PARAM } from "./SignInForm";
 
-const MAX_NAME_LENGTH = 20;
+const MAX_NAME_LENGTH = MAX_USERNAME_LENGTH;
 
 interface Profile {
   display_name: string;
@@ -16,7 +15,7 @@ interface Profile {
 interface Props {
   user: User | null;
   accessToken: string | undefined;
-  signInWithEmail: (email: string) => Promise<string | null>;
+  signInWithEmail: (email: string, redirectTo?: string) => Promise<string | null>;
   signOut: () => void;
 }
 
@@ -68,15 +67,27 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
       setRenameError(`Keep it under ${MAX_NAME_LENGTH} characters.`);
       return;
     }
-    if (!user) return;
+    if (!accessToken) return;
     setRenameStatus("saving");
-    // Safe directly from the client: RLS restricts this update to the
-    // signed-in user's own row and only grants the display_name column
-    // (see the schema set up when accounts were added).
-    const { error } = await supabase.from("profiles").update({ display_name: trimmed }).eq("id", user.id);
-    if (error) {
+    // Routed through /claim-username (not a direct Supabase client call)
+    // so rename enforces the same cross-account uniqueness check as the
+    // sign-in flow -- two accounts could otherwise end up with identical
+    // display_names via this path even after sign-in was locked down.
+    try {
+      const res = await fetch(`${API_URL}/claim-username`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ username: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRenameStatus("error");
+        setRenameError(data.error ?? "Couldn't save that name.");
+        return;
+      }
+    } catch {
       setRenameStatus("error");
-      setRenameError(error.message);
+      setRenameError("Couldn't reach the server -- try again in a bit.");
       return;
     }
     setProfile((prev) => (prev ? { ...prev, display_name: trimmed } : prev));
@@ -117,7 +128,12 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
         <div className="modal-backdrop">
           <div className="modal">
             <h3>Sign in to appear on the leaderboard</h3>
-            <SignInForm signInWithEmail={signInWithEmail} onClose={() => setShowSignIn(false)} />
+            <SignInForm
+              onSubmit={(email, username) =>
+                signInWithEmail(email, `${window.location.origin}?${USERNAME_QUERY_PARAM}=${encodeURIComponent(username)}`)
+              }
+              onClose={() => setShowSignIn(false)}
+            />
           </div>
         </div>
       )}

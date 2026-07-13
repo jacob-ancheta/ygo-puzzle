@@ -97,3 +97,36 @@ async def get_profile(user_id: str) -> dict | None:
         resp.raise_for_status()
         rows = resp.json()
         return rows[0] if rows else None
+
+
+async def display_name_taken(display_name: str, exclude_user_id: str | None = None) -> bool:
+    """Whether some OTHER profile already has this display_name. Application-
+    level only -- there's no unique constraint on profiles.display_name at
+    the DB level (would need a migration run directly in Supabase), so this
+    is a best-effort check, not a hard guarantee under true concurrent
+    writes. Good enough for two humans clicking magic links at different
+    times, which is the realistic case."""
+    if not SUPABASE_URL or not SERVICE_ROLE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_headers(),
+            params={"display_name": f"eq.{display_name}", "select": "id", "limit": "5"},
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return any(row["id"] != exclude_user_id for row in rows)
+
+
+async def set_display_name(user_id: str, display_name: str) -> None:
+    if not SUPABASE_URL or not SERVICE_ROLE_KEY:
+        return
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            headers=_headers(),
+            params={"id": f"eq.{user_id}"},
+            json={"display_name": display_name},
+        )
+        resp.raise_for_status()

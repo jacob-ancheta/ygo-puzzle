@@ -161,7 +161,7 @@ function TextPrompt({ title, placeholder, onSubmit }: { title: string; placehold
   const [value, setValue] = useState("");
   return (
     <Modal title={title}>
-      <input className="text-input" value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder} autoFocus />
+      <input className="text-input" value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder} maxLength={100} autoFocus />
       <div className="modal-actions">
         <button className="btn primary" onClick={() => onSubmit(value)}>Submit</button>
       </div>

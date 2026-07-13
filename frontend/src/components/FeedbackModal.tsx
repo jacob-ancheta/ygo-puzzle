@@ -8,6 +8,9 @@ interface Props {
 type Kind = "bug" | "suggestion";
 type Status = "idle" | "sending" | "sent" | "error";
 
+const MAX_MESSAGE_LENGTH = 4000;
+const MAX_EMAIL_LENGTH = 254;
+
 export default function FeedbackModal({ onClose }: Props) {
   const [kind, setKind] = useState<Kind>("bug");
   const [message, setMessage] = useState("");
@@ -65,6 +68,7 @@ export default function FeedbackModal({ onClose }: Props) {
             <textarea
               className="text-input"
               rows={5}
+              maxLength={MAX_MESSAGE_LENGTH}
               placeholder={kind === "bug" ? "What happened, and what did you expect instead?" : "What card(s)/setup would make a good puzzle?"}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -73,6 +77,7 @@ export default function FeedbackModal({ onClose }: Props) {
             <input
               className="text-input feedback-contact-email"
               type="email"
+              maxLength={MAX_EMAIL_LENGTH}
               placeholder="Your email (optional, if you want a reply)"
               value={contactEmail}
               onChange={(e) => setContactEmail(e.target.value)}
