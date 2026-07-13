@@ -108,6 +108,54 @@ async def profile_me(authorization: str = Header(default="")):
     return profile or {"error": "profile not found"}
 
 
+MAX_USERNAME_LENGTH = 20
+
+
+@app.get("/username-available")
+async def username_available(name: str = ""):
+    name = name.strip()
+    if not name or len(name) > MAX_USERNAME_LENGTH:
+        return {"available": False}
+    try:
+        taken = await leaderboard.display_name_taken(name)
+    except Exception as e:
+        print(f"[username_available] check failed for name={name!r}: {e!r}")
+        return {"available": False}
+    return {"available": not taken}
+
+
+class ClaimUsernameRequest(BaseModel):
+    username: str
+
+
+@app.post("/claim-username")
+async def claim_username(body: ClaimUsernameRequest, authorization: str = Header(default="")):
+    """Sets the caller's own display_name -- called once they've actually
+    signed in (see SignInForm's flow), so a username is only ever reserved
+    once someone has clicked their magic link, not merely by typing it into
+    the form. Best-effort uniqueness (see display_name_taken's docstring for
+    why this isn't a hard DB-level guarantee)."""
+    access_token = authorization.removeprefix("Bearer ").strip()
+    user_id = await verify_supabase_jwt(access_token)
+    if user_id is None:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    username = body.username.strip()
+    if not username or len(username) > MAX_USERNAME_LENGTH:
+        return JSONResponse(
+            {"error": f"username must be non-empty and under {MAX_USERNAME_LENGTH} characters"},
+            status_code=400,
+        )
+    try:
+        taken = await leaderboard.display_name_taken(username, exclude_user_id=user_id)
+        if taken:
+            return JSONResponse({"error": "that username is already taken"}, status_code=409)
+        await leaderboard.set_display_name(user_id, username)
+    except Exception as e:
+        print(f"[claim_username] failed for user_id={user_id!r} username={username!r}: {e!r}")
+        return JSONResponse({"error": "couldn't save that username -- try again in a bit"}, status_code=502)
+    return {"ok": True, "display_name": username}
+
+
 class ClaimWinRequest(BaseModel):
     token: str
 
@@ -141,6 +189,7 @@ class FeedbackRequest(BaseModel):
 
 
 MAX_FEEDBACK_LENGTH = 4000
+MAX_EMAIL_LENGTH = 254
 
 
 @app.post("/feedback")
@@ -152,6 +201,8 @@ async def submit_feedback(body: FeedbackRequest):
             status_code=400,
         )
     contact_email = body.contact_email.strip() if body.contact_email else None
+    if contact_email and len(contact_email) > MAX_EMAIL_LENGTH:
+        return JSONResponse({"error": f"email must be under {MAX_EMAIL_LENGTH} characters"}, status_code=400)
     try:
         sent = await feedback.send_feedback_email(body.kind, message, contact_email)
     except Exception as e:

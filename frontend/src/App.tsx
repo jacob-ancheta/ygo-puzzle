@@ -12,7 +12,9 @@ import AuthPanel from "./components/AuthPanel";
 import ResetCountdown from "./components/ResetCountdown";
 import LeaderboardModal from "./components/LeaderboardModal";
 import FeedbackModal from "./components/FeedbackModal";
+import LossModal from "./components/LossModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
+import { USERNAME_QUERY_PARAM } from "./components/SignInForm";
 import { nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { API_URL, WS_URL } from "./config";
@@ -99,7 +101,7 @@ export default function App() {
   }, [user, connect]);
 
   // WinModal's "Sign In" button embeds the claim token directly in the
-  // magic-link's redirect URL (see WinModal.tsx's signInAndCarryClaim) --
+  // magic-link's redirect URL (see WinModal.tsx's handleSignIn) --
   // read it back here and redeem it. A plain POST, entirely independent of
   // the duel socket/reconnect effect above: the win already happened
   // server-side, so there's nothing to replay.
@@ -145,6 +147,40 @@ export default function App() {
         }
       })
       .catch(() => setClaimResult({ error: "Couldn't reach the server to save your win." }));
+  }, [session]);
+
+  // Same pattern as the win-claim effect above, for the username chosen at
+  // sign-in time (see SignInForm) -- also embedded in the redirect URL
+  // rather than localStorage, and only actually reserved here, once the
+  // player has verified via the magic link, not merely by typing it into
+  // the form (see /claim-username's uniqueness check).
+  const usernameClaimAttemptedRef = useRef(false);
+  const [usernameResult, setUsernameResult] = useState<{ name: string } | { error: string } | null>(null);
+  useEffect(() => {
+    if (usernameClaimAttemptedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const username = params.get(USERNAME_QUERY_PARAM);
+    if (!username) return;
+    if (!session?.access_token) return;
+    usernameClaimAttemptedRef.current = true;
+    params.delete(USERNAME_QUERY_PARAM);
+    const cleanedSearch = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (cleanedSearch ? `?${cleanedSearch}` : ""));
+
+    fetch(`${API_URL}/claim-username`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ username }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (res.ok) {
+          setUsernameResult({ name: data.display_name ?? username });
+        } else {
+          setUsernameResult({ error: data.error ?? "Couldn't set that username." });
+        }
+      })
+      .catch(() => setUsernameResult({ error: "Couldn't reach the server to set your username." }));
   }, [session]);
 
   // A restart isn't free server-side (a fresh native duel object, a new
@@ -204,6 +240,14 @@ export default function App() {
     if (isPlayerWin !== wasPlayerWinRef.current) setShowWinModal(isPlayerWin);
     wasPlayerWinRef.current = isPlayerWin;
   }, [board.status, board.playerWon]);
+
+  const [showLossModal, setShowLossModal] = useState(false);
+  const wasLossRef = useRef(false);
+  useEffect(() => {
+    const isLoss = board.status === "loss";
+    if (isLoss !== wasLossRef.current) setShowLossModal(isLoss);
+    wasLossRef.current = isLoss;
+  }, [board.status]);
 
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmState | null>(null);
@@ -553,7 +597,7 @@ export default function App() {
       <div className="side-controls">
         <button
           className={`priority-toggle ${priorityOn ? "on" : "off"}`}
-          onClick={() => setPriorityOn((v) => !v)}
+          onClick={(e) => { setPriorityOn((v) => !v); e.currentTarget.blur(); }}
           title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
         >
           <span className="priority-toggle-label">Toggle</span>
@@ -588,6 +632,13 @@ export default function App() {
         />
       )}
 
+      {showLossModal && (
+        <LossModal
+          onRestart={() => { setShowLossModal(false); restart(); }}
+          onViewBoard={() => setShowLossModal(false)}
+        />
+      )}
+
       {claimResult && (
         <div className="modal-backdrop">
           <div className="modal">
@@ -604,6 +655,28 @@ export default function App() {
             )}
             <div className="modal-actions">
               <button className="btn primary" onClick={() => setClaimResult(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {usernameResult && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            {"name" in usernameResult ? (
+              <>
+                <h3>Username saved!</h3>
+                <p>You're now signed in as {usernameResult.name}.</p>
+              </>
+            ) : (
+              <>
+                <h3>Couldn't set your username</h3>
+                <p className="error-banner">{usernameResult.error}</p>
+                <p className="dim">You're still signed in -- you can pick a name anytime via Rename in the header.</p>
+              </>
+            )}
+            <div className="modal-actions">
+              <button className="btn primary" onClick={() => setUsernameResult(null)}>Close</button>
             </div>
           </div>
         </div>

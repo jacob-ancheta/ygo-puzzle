@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTodayLeaderboard } from "../useTodayLeaderboard";
-import SignInForm from "./SignInForm";
+import SignInForm, { USERNAME_QUERY_PARAM } from "./SignInForm";
 import LeaderboardList from "./LeaderboardList";
 
 export interface WinSummary {
@@ -44,15 +44,16 @@ export default function WinModal({ winSummary, communityPosition, claimToken, si
   // emailRedirectTo) that can land in an entirely different browser/app
   // than the one that requested it -- most commonly an email client's
   // in-app browser, which doesn't share localStorage with wherever this
-  // page is running. Embedding the claim token directly in the redirect
-  // URL survives that regardless, since it travels with the link itself
-  // rather than depending on persisted storage. App.tsx reads it back off
-  // window.location on load and posts it to /claim-win.
-  function signInAndCarryClaim(email: string) {
-    const redirectTo = claimToken
-      ? `${window.location.origin}?${CLAIM_QUERY_PARAM}=${encodeURIComponent(claimToken)}`
-      : undefined;
-    return signInWithEmail(email, redirectTo);
+  // page is running. Embedding both the claim token and the desired
+  // username directly in the redirect URL survives that regardless, since
+  // they travel with the link itself rather than depending on persisted
+  // storage. App.tsx reads them back off window.location on load and posts
+  // to /claim-win and /claim-username respectively.
+  function handleSignIn(email: string, username: string) {
+    const params = new URLSearchParams();
+    if (claimToken) params.set(CLAIM_QUERY_PARAM, claimToken);
+    params.set(USERNAME_QUERY_PARAM, username);
+    return signInWithEmail(email, `${window.location.origin}?${params.toString()}`);
   }
 
   // Real (signed-in, tamper-resistant) position takes priority; the rough
@@ -102,7 +103,7 @@ export default function WinModal({ winSummary, communityPosition, claimToken, si
                   <p>Sign in to appear on the leaderboard next time.</p>
                 )}
                 {showSignIn ? (
-                  <SignInForm signInWithEmail={signInAndCarryClaim} onClose={() => setShowSignIn(false)} />
+                  <SignInForm onSubmit={handleSignIn} onClose={() => setShowSignIn(false)} />
                 ) : (
                   <button className="btn small" onClick={() => setShowSignIn(true)}>
                     Sign in{claimToken ? " to save your spot" : ""}

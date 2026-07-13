@@ -702,18 +702,38 @@ def run(engine):
     # i.e. "the thing currently being responded to". Drives eff_behaviour's
     # `respond_to` restriction for the opponent AI (see opponent_ai.py).
     last_chaining_code = None
+    # Card code for each chain link, keyed by link number (1-indexed,
+    # matching MSG_CHAINING's chain_size / MSG_CHAIN_SOLVING's link number).
+    # Built up as links get added to the chain -- which can span several
+    # separate player decisions for a batch of simultaneous triggers, see
+    # MSG_SELECT_CHAIN -- and consulted once the engine actually starts
+    # resolving each one (MSG_CHAIN_SOLVING), since chain resolution walks
+    # LIFO (last added, first resolved), the *opposite* order from
+    # last_chaining_code alone.
+    chain_link_cards = {}
+    # Which link is actually resolving right now, per the most recent
+    # MSG_CHAIN_SOLVING -- None before any link has started resolving, or
+    # once the whole chain has ended (MSG_CHAIN_END).
+    current_solving_link = None
 
     def chain_source():
         # Attached to prompts whose UI needs "who is asking" (e.g. "select a
-        # card for X") -- reading last_chaining_code here, synchronously in
-        # the same generator step that builds the prompt, is immune to the
-        # client-side staleness a board-state-derived label is prone to: with
-        # simultaneous/nested chain links, the browser can receive several
-        # "chaining" events before it ever renders the one a given prompt
-        # actually belongs to (batched WS delivery, or a deliberately paused
-        # notice queue for opponent activations -- see App.tsx), so by the
-        # time it renders, a client-tracked "most recent chaining card" may
-        # already reflect a *later* link than the prompt in hand.
+        # card for X"). Once the engine has told us which link is actually
+        # resolving (MSG_CHAIN_SOLVING), that's authoritative: a chain built
+        # from simultaneous triggers can have several links queued up before
+        # any of them resolve, and resolution then walks them in LIFO order
+        # (last added, first resolved) -- last_chaining_code alone ("whoever
+        # was just added") stays frozen on the last-added link the whole
+        # time, which is only ever correct for that single first-to-resolve
+        # link and silently wrong for every link resolved after it (the
+        # reported bug: a "select a card for X" prompt during Y's actual
+        # resolution). Before any link has started resolving yet -- e.g. a
+        # "choose target for Y" prompt at activation time, before
+        # MSG_CHAIN_SOLVING has fired for it -- current_solving_link isn't
+        # set yet, so last_chaining_code (still "whichever card was just
+        # added") is the correct fallback.
+        if current_solving_link is not None and current_solving_link in chain_link_cards:
+            return card_brief(chain_link_cards[current_solving_link])
         return card_brief(last_chaining_code) if last_chaining_code is not None else None
 
     while True:
@@ -784,6 +804,7 @@ def run(engine):
             desc = stream.u32()
             chain_size = stream.u8()
             last_chaining_code = code
+            chain_link_cards[chain_size] = code
             yield {"type": "event", "event": "chaining", "card": card_brief(code),
                    "chain_link": chain_size, "desc": desc, "location": location}
 
@@ -792,6 +813,7 @@ def run(engine):
 
         elif msg == MSG_CHAIN_SOLVING:
             n = stream.u8()
+            current_solving_link = n
             yield {"type": "event", "event": "chain_solving", "chain_link": n}
 
         elif msg == MSG_CHAIN_SOLVED:
@@ -799,6 +821,8 @@ def run(engine):
 
         elif msg == MSG_CHAIN_END:
             engine.opponent_ai.clear_active()
+            current_solving_link = None
+            chain_link_cards.clear()
             yield {"type": "event", "event": "chain_end"}
             yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
 
