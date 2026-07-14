@@ -256,6 +256,9 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   // player's actual hand -- it's the only thing relevant to the decision.
   const placingCard = board.placingCard ?? placingCardFallback ?? undefined;
   const isPlacing = prompt?.prompt === "place" && Boolean(placingCard);
+  if (prompt?.prompt === "place") {
+    console.log("[DEBUG place]", { promptPrompt: prompt?.prompt, boardPlacingCard: board.placingCard, placingCardFallback, placingCard, isPlacing, promptOptions: prompt?.options });
+  }
 
   return (
     <div className="board">

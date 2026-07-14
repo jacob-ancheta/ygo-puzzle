@@ -69,7 +69,7 @@ export default function FeedbackModal({ onClose }: Props) {
               className="text-input"
               rows={5}
               maxLength={MAX_MESSAGE_LENGTH}
-              placeholder={kind === "bug" ? "What happened, and what did you expect instead?" : "What card(s)/setup would make a good puzzle?"}
+              placeholder={kind === "bug" ? "What happened, and what did you expect instead?" : "Please include the exact field state and the intended solution."}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               autoFocus
