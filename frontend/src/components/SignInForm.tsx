@@ -69,7 +69,7 @@ export default function SignInForm({ onSubmit, onClose }: Props) {
   return (
     <>
       {status === "sent" ? (
-        <p>Check your email for a magic link.</p>
+        <p>Check your email for a link.</p>
       ) : (
         <>
           <input
@@ -97,7 +97,7 @@ export default function SignInForm({ onSubmit, onClose }: Props) {
       <div className="modal-actions">
         {status !== "sent" && (
           <button className="btn primary" disabled={!canSubmit} onClick={handleSend}>
-            {status === "sending" ? "Sending..." : "Send magic link"}
+            {status === "sending" ? "Sending..." : "Send link"}
           </button>
         )}
         {onClose && <button className="btn" onClick={onClose}>Close</button>}
