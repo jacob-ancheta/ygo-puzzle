@@ -409,11 +409,24 @@ function ZoneCardSlot({
 
   const selectIdx = matchCardIndex(prompt, card.code, loc);
   const isUnselectPrompt = prompt?.prompt === "select_unselect";
+  // MSG_SELECT_SUM may carry materials the engine already made compulsory
+  // while narrowing the legal combination.  They are not present in
+  // `options` (and must not be sent back as selectable indices), but still
+  // need to look selected on the board so the player sees the full material
+  // set rather than only the remaining card(s).
+  const isRequiredSumMaterial = prompt?.prompt === "sum"
+    && ((prompt.must_include as { code: number; location: Loc }[] | undefined) ?? []).some((item) =>
+      item.code === card.code
+      && item.location.controller === loc.controller
+      && item.location.location_id === loc.location_id
+      && item.location.sequence === loc.sequence);
   const alreadySelected = isUnselectPrompt && selectIdx !== null
     ? Boolean((prompt!.items as { already_selected?: boolean }[])[selectIdx as number]?.already_selected) || selectIdx === pendingFinalChoice
     : false;
-  const selected = isUnselectPrompt ? alreadySelected : (selectIdx !== null && selection.includes(selectIdx));
-  const selectable = selectIdx !== null;
+  const selected = isRequiredSumMaterial || (isUnselectPrompt
+    ? alreadySelected
+    : (selectIdx !== null && selection.includes(selectIdx)));
+  const selectable = selectIdx !== null && !isRequiredSumMaterial;
 
   const isFaceDown = Boolean(card.position && (card.position & POS.FACEDOWN_ATTACK || card.position & POS.FACEDOWN_DEFENSE));
 
