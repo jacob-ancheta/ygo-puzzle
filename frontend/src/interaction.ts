@@ -60,6 +60,15 @@ export function matchCardIndex(prompt: Record<string, unknown> | null, code: num
   const idx = list.findIndex((it) => {
     if (it.code !== code) return false;
     if (it.location) {
+      // The core shuffles a player's hand, while the board receives the
+      // shuffle only as a cosmetic event and retains its current display
+      // order.  A discard/hand-selection prompt therefore has the correct
+      // card code but a sequence that can differ from the displayed slot.
+      // Hand cards are not positional targets, so matching their identity is
+      // the correct interaction and makes those cards selectable again.
+      if (loc.location_id === LOC.HAND && it.location.location_id === LOC.HAND) {
+        return it.location.controller === loc.controller;
+      }
       return it.location.controller === loc.controller && it.location.location_id === loc.location_id && it.location.sequence === loc.sequence;
     }
     return true;

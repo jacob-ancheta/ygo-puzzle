@@ -553,7 +553,19 @@ export default function App() {
   // The fallback stays for prompt kinds that don't carry "source" (e.g. the
   // "chain" prompt itself, which lists its own per-option cards instead).
   const promptSource = (effectivePrompt?.source as CardRef | undefined) ?? board.currentChainCard;
-  const forWhom = promptSource ? ` for ${promptSource.name}` : "";
+  // Selection prompts generated for a summon do not belong to the last card
+  // on the chain.  In particular, after Double Summon resolves that stale
+  // chain card used to make Brionac's material picker read as though Double
+  // Summon were requesting the selection.
+  const forWhom = effectivePrompt?.source && effectivePromptKind !== "sum" && effectivePromptKind !== "select_unselect"
+    ? ` for ${(effectivePrompt.source as CardRef).name}`
+    : "";
+  const requiredSumMaterials = effectivePromptKind === "sum"
+    ? ((effectivePrompt?.must_include as CardRef[] | undefined) ?? [])
+    : [];
+  const sumLabel = requiredSumMaterials.length
+    ? `Select materials totaling ${effectivePrompt?.target} (already selected: ${requiredSumMaterials.map((card) => card.name).join(", ")})`
+    : `Select materials totaling ${effectivePrompt?.target}`;
 
   // What the *board* actually renders: while an opponent-activation notice
   // is up, freeze on that notice's own snapshot (see chainNotices in
@@ -726,7 +738,7 @@ export default function App() {
 
       {isMultiSelect && effectivePrompt && !pileView && (
         <SelectionBar
-          label={effectivePromptKind === "sum" ? `Cards summing to ${effectivePrompt.target}` : `Select ${effectivePromptKind}${forWhom}`}
+          label={effectivePromptKind === "sum" ? sumLabel : `Select ${effectivePromptKind}${forWhom}`}
           count={selection.length}
           min={effectivePrompt.min as number}
           max={effectivePrompt.max as number}

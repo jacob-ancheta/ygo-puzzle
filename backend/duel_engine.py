@@ -822,6 +822,10 @@ def run(engine):
         elif msg == MSG_CHAIN_END:
             engine.opponent_ai.clear_active()
             current_solving_link = None
+            # A subsequent summon/material prompt is not part of the chain
+            # that just ended.  Leaving this value around made those prompts
+            # look as if the previous effect card were requesting them.
+            last_chaining_code = None
             chain_link_cards.clear()
             yield {"type": "event", "event": "chain_end"}
             yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
@@ -1275,7 +1279,7 @@ def run(engine):
                     loc_info = describe_location(stream.u32())
                 items.append((code, loc_info))
 
-            if player == 1:
+            if pending is None and player == 1:
                 codes = [c & 0x7fffffff for c, _ in items]
                 chosen = engine.opponent_ai.choose_target(codes, min_sel, max_sel)
                 engine.send_b([len(chosen)] + chosen)
@@ -1294,7 +1298,7 @@ def run(engine):
                                                      len(items), min_sel, max_sel)
                     engine.send_b([len(chosen)] + chosen)
                 pending = yield from interact(engine, ask)
-            elif player != 1:
+            elif pending is None and player != 1:
                 def ask():
                     chosen = yield from ask_indices({"type": "prompt",
                                                       "prompt": "tribute" if has_release_param else "card",
@@ -1446,7 +1450,7 @@ def run(engine):
             combined = select_items + unselect_items
             can_finish = bool(finishable or cancelable)
 
-            if player == 1:
+            if pending is None and player == 1:
                 # bvalue and ivalue share the same union in the engine's
                 # response struct, and MSG_SELECT_UNSELECT_CARD's finish
                 # check reads ivalue[0] == -1, so all 4 bytes of that first
@@ -1475,7 +1479,7 @@ def run(engine):
                             return
                         current = dict(payload, error="invalid choice")
                 pending = yield from interact(engine, ask)
-            elif player != 1:
+            elif pending is None and player != 1:
                 def ask():
                     payload = {"type": "prompt", "prompt": "select_unselect", "player": player,
                                "min": min_sel, "max": max_sel, "can_finish": can_finish, "source": chain_source(),
@@ -1531,6 +1535,7 @@ def run(engine):
                     lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
                     chosen = yield from ask_indices(
                         {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
+                         "min": lo, "max": hi,
                          "note": "auto-choice wasn't legal", "source": chain_source(),
                          "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
                          "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
@@ -1542,7 +1547,8 @@ def run(engine):
                     codes = [c for c, _, _ in opt_items]
                     lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
                     chosen = yield from ask_indices(
-                        {"type": "prompt", "prompt": "sum", "player": player, "target": acc, "source": chain_source(),
+                        {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
+                         "min": lo, "max": hi, "source": chain_source(),
                          "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
                          "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
                         len(codes), lo, hi)
