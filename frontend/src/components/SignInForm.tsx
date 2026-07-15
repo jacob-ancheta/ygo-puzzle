@@ -84,7 +84,7 @@ export default function SignInForm({ onSubmit, onClose }: Props) {
   return (
     <>
       {status === "sent" ? (
-        <p>Check your email for a link.</p>
+        <p>Check your email for a link. (Please check spam)</p>
       ) : (
         <>
           <input
