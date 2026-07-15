@@ -44,8 +44,16 @@ def load_puzzle_dict(date_str):
 
 
 def puzzle_card_names(puzzle):
+    # Must mirror duel_engine.resolve_all()'s key coverage -- any zone a
+    # puzzle can seed a card into needs that card's art cached (this lagged
+    # behind once before: player_field cards silently rendered with no
+    # image because this list predated the newer optional keys).
     names = [e["name"] for e in puzzle["opponent_field"]]
     names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
+    names += [e["name"] for e in puzzle.get("player_field", [])]
+    names += puzzle.get("player_banished", [])
+    names += puzzle.get("opponent_graveyard", [])
+    names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
     return names
 
 

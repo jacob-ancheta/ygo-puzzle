@@ -277,10 +277,22 @@ class DuelEngine:
         lib.set_player_info(ctypes.c_ssize_t(self.pduel), 0, puzzle["lp"]["player"], 0, 1)
         lib.set_player_info(ctypes.c_ssize_t(self.pduel), 1, puzzle["lp"]["opponent"], 0, 1)
 
+        def field_position(entry, card):
+            # Link Monsters have no DEF and no defense position, by game
+            # rule, under any circumstance -- the engine enforces it for
+            # everything summoned through real mechanics, so the one hole is
+            # a puzzle author pre-placing one "defense". Fail at load, the
+            # same place a bad card name fails, rather than starting a duel
+            # in an impossible state.
+            if entry["position"] != "attack" and card["type"] & TYPE_LINK:
+                raise ValueError(
+                    f"puzzle places Link Monster {entry['name']!r} in defense position -- "
+                    "Link Monsters cannot be in defense")
+            return POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
+
         for i, entry in enumerate(puzzle["opponent_field"]):
             card = self.resolved[entry["name"]]
-            pos = POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
-            self._place(card["code"], 1, LOCATION_MZONE, i, pos)
+            self._place(card["code"], 1, LOCATION_MZONE, i, field_position(entry, card))
         for i, name in enumerate(puzzle["player_hand"]):
             self._place(self.resolved[name]["code"], 0, LOCATION_HAND, i, POS_FACEUP_ATTACK)
         for i, name in enumerate(puzzle["player_deck"]):
@@ -292,8 +304,7 @@ class DuelEngine:
         # already banished, instead of only ever starting from hand/deck.
         for i, entry in enumerate(puzzle.get("player_field", [])):
             card = self.resolved[entry["name"]]
-            pos = POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
-            self._place(card["code"], 0, LOCATION_MZONE, i, pos)
+            self._place(card["code"], 0, LOCATION_MZONE, i, field_position(entry, card))
         for i, name in enumerate(puzzle.get("player_banished", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_REMOVED, i, POS_FACEUP_ATTACK)
         # Optional -- seeds the opponent's graveyard so effects like Futsu no

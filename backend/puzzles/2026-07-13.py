@@ -23,11 +23,6 @@ PUZZLE = {
     # Entries are either a bare name or, like opponent_field, a dict with a
     # "name" and an optional "eff_behaviour" policy (see opponent_ai.py) for
     # hand traps and other from-hand effects.
-    "opponent_hand": [
-        "Elemental HERO Stratos",
-        {"name": 'Maxx "C"',
-         "eff_behaviour": {"trigger": "first", "respond_to": "Elemental HERO Stratos"}},
-    ],
 
     "player_hand": [
         "Double Summon",

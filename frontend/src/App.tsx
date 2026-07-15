@@ -16,7 +16,7 @@ import LossModal from "./components/LossModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { USERNAME_QUERY_PARAM } from "./components/SignInForm";
 import { idleOptionLabel, nonCardOptions } from "./interaction";
-import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
+import { LOC, POS, TYPE_FIELD, guessOpenZones, type BoardState, type ZoneCard } from "./boardState";
 import { API_URL, WS_URL } from "./config";
 import type { CardRef, IdleBattleOption } from "./protocol";
 
@@ -40,6 +40,15 @@ function needsConfirm(action: string): boolean {
 function confirmLabel(action: string, cardName: string): string {
   if (action === "Special Summon") return `Special Summon ${cardName}?`;
   return `Activate effect of ${cardName}?`;
+}
+
+// "Change Position" spelled by destination -- the menu opens from a specific
+// board card (a ZoneCard, so its live position is on it), and "To Defense"
+// reads much clearer than a direction-less "Change Position".
+function repositionLabel(card: CardRef | undefined): string {
+  const pos = (card as ZoneCard | undefined)?.position;
+  if (pos === undefined) return "Change Position";
+  return (pos & POS.FACEUP_ATTACK) || (pos & POS.FACEDOWN_ATTACK) ? "To Defense" : "To Attack";
 }
 
 // Set Monster/Set Spell-Trap/Normal Summon all place onto one of the
@@ -488,7 +497,12 @@ export default function App() {
       setPileView({ label: `${card.name}'s Materials`, cards: materials as CardRef[] });
       return;
     }
-    if (options.length === 1 && !hasMaterials) {
+    // Change Position deliberately never auto-commits, even as a lone
+    // option: a pre-placed field monster often has *only* this action, and
+    // single-click instantly flipping it (with no un-do -- position changes
+    // are once per turn) made merely inspecting the card destructive. It
+    // always goes through the menu (with a Cancel) instead.
+    if (options.length === 1 && !hasMaterials && options[0].option.action !== "Change Position") {
       dispatchIdleChoice(card, options[0].option, options[0].idx);
       return;
     }
@@ -821,13 +835,25 @@ export default function App() {
               : []),
             ...menu.options.map(({ option, idx }) => ({
               key: idx,
-              label: idleOptionLabel(option),
+              label: option.action === "Change Position"
+                ? repositionLabel(menu.card)
+                : idleOptionLabel(option),
               onClick: () => {
                 const c = option.card ?? menu.card;
+                // Card-less options (battle_phase/end_phase from the phase
+                // menu) go straight to the server -- they have no placement
+                // or confirm step to dispatch through.
                 if (c) dispatchIdleChoice(c, option, idx);
+                else respond({ choice: idx });
                 setMenu(null);
               },
             })),
+            // Change Position never auto-commits (see handleCardMenu) and is
+            // once per turn, so its menu gets an explicit way to back out --
+            // clicking anywhere outside still closes it too.
+            ...(menu.options.some(({ option }) => option.action === "Change Position")
+              ? [{ key: "cancel", label: "Cancel", onClick: () => setMenu(null) }]
+              : []),
           ]}
           disableOutsideClose={confirmAction !== null}
           onClose={() => setMenu(null)}
