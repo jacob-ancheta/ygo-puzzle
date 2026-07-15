@@ -2,8 +2,8 @@
 Wordle-style daily puzzle rotation. Each backend/puzzles/YYYY-MM-DD.py file
 defines one puzzle (a module-level PUZZLE dict, same shape as the old
 puzzle_definition.py). "Today" is computed in US Eastern time so every
-player sees the same puzzle change at the same midnight, regardless of
-their own timezone.
+player sees the same puzzle change at the same moment, regardless of their
+own timezone.
 
 Puzzle files are loaded via importlib.util rather than a normal package
 import since "YYYY-MM-DD" isn't a valid Python identifier.
@@ -11,12 +11,19 @@ import since "YYYY-MM-DD" isn't a valid Python identifier.
 import importlib.util
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 PUZZLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "puzzles")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.py$")
 ROTATION_TZ = ZoneInfo("America/New_York")
+# Puzzles rotate at 4pm Eastern rather than midnight -- see resetTime.ts's
+# identical ROTATION_HOUR on the frontend, which this must stay in sync
+# with (both the cosmetic countdown and the client's actual
+# auto-reconnect-at-rotation timer key off it there).  A file dated D is
+# "today's" from D 16:00 through (D+1) 16:00 -- i.e. before 16:00, today's
+# puzzle-day is still yesterday's calendar date.
+ROTATION_HOUR = 16
 
 _cache = {}
 
@@ -32,7 +39,10 @@ def available_dates():
 
 
 def today_str():
-    return datetime.now(ROTATION_TZ).date().isoformat()
+    now = datetime.now(ROTATION_TZ)
+    if now.hour < ROTATION_HOUR:
+        now -= timedelta(days=1)
+    return now.date().isoformat()
 
 
 def load_puzzle(date_str):
