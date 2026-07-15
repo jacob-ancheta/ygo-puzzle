@@ -252,17 +252,29 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       b.lp = { 0: lp.player, 1: lp.opponent };
       const opponentField = item.opponent_field as { card: CardRef; zone: number; position: string }[];
       const playerField = (item.player_field ?? []) as { card: CardRef; zone: number; position: string }[];
+      const opponentSpellTrap = (item.opponent_spelltrap ?? []) as { card: CardRef; zone: number; position: string }[];
+      const playerSpellTrap = (item.player_spelltrap ?? []) as { card: CardRef; zone: number; position: string }[];
+      const monsterPos = (position: string) =>
+        position === "attack" ? POS.FACEUP_ATTACK
+          : position === "set" ? POS.FACEDOWN_DEFENSE
+            : POS.FACEUP_DEFENSE;
       const zones: Record<string, ZoneCard> = {};
       for (const entry of opponentField) {
-        zones[zoneKey(1, LOC.MZONE, entry.zone)] = {
-          ...entry.card,
-          position: entry.position === "attack" ? POS.FACEUP_ATTACK : POS.FACEUP_DEFENSE,
-        };
+        zones[zoneKey(1, LOC.MZONE, entry.zone)] = { ...entry.card, position: monsterPos(entry.position) };
       }
       for (const entry of playerField) {
-        zones[zoneKey(0, LOC.MZONE, entry.zone)] = {
+        zones[zoneKey(0, LOC.MZONE, entry.zone)] = { ...entry.card, position: monsterPos(entry.position) };
+      }
+      for (const entry of opponentSpellTrap) {
+        zones[zoneKey(1, LOC.SZONE, entry.zone)] = {
           ...entry.card,
-          position: entry.position === "attack" ? POS.FACEUP_ATTACK : POS.FACEUP_DEFENSE,
+          position: entry.position === "faceup" ? POS.FACEUP_ATTACK : POS.FACEDOWN_ATTACK,
+        };
+      }
+      for (const entry of playerSpellTrap) {
+        zones[zoneKey(0, LOC.SZONE, entry.zone)] = {
+          ...entry.card,
+          position: entry.position === "faceup" ? POS.FACEUP_ATTACK : POS.FACEDOWN_ATTACK,
         };
       }
       b.zones = zones;
@@ -316,10 +328,21 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
     case "pos_change": {
       const card = item.card as CardRef;
       const position = item.position as number;
+      const loc = item.location as { controller: number; location_id: number; sequence: number } | undefined;
       const zones = { ...board.zones };
-      for (const key of Object.keys(zones)) {
-        if (zones[key].code === card.code) {
+      if (loc) {
+        // Exact-zone update -- matching by code alone flipped every copy of
+        // the card on the board (all four pre-placed Skill Drains at once)
+        // instead of just the one that actually changed position.
+        const key = zoneKey(loc.controller, loc.location_id, loc.sequence);
+        if (zones[key]?.code === card.code) {
           zones[key] = { ...zones[key], position };
+        }
+      } else {
+        for (const key of Object.keys(zones)) {
+          if (zones[key].code === card.code) {
+            zones[key] = { ...zones[key], position };
+          }
         }
       }
       return { ...board, zones };

@@ -14,11 +14,27 @@ PUZZLE = {
 
     "opponent_field": [],
 
-    "player_hand": [
-        "Maliss <P> Dormouse",
+    # Spell/Trap zone cards, either side. position: "set" (face-down, and
+    # immediately activatable -- pre-placed cards carry no "set this turn"
+    # restriction) or "faceup" (a continuous card already active).
+    "player_spelltrap": [
+        {"name": "Skill Drain", "position": "set"},
+        {"name": "Skill Drain", "position": "faceup"},
     ],
 
-    "player_deck": [],
+    "opponent_spelltrap": [
+        {"name": "Skill Drain", "position": "set"},
+        {"name": "Skill Drain", "position": "faceup"},
+    ],
+
+    "player_hand": [
+        "Maliss <P> Dormouse",
+        "Elemental HERO Stratos",
+    ],
+
+    "player_deck": [
+        "Destiny HERO - Malicious",
+    ],
 
     "player_extra": [],
 
