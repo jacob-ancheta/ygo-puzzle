@@ -7,6 +7,7 @@ The filename (YYYY-MM-DD.py) is the date this puzzle is served on.
 """
 
 PUZZLE = {
+    "title": "Thats not how it works in Edison",
     "lp": {"player": 8000, "opponent": 5000},
 
     "opponent_field": [
