@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { API_URL } from "../config";
+import type { SignInResult } from "../useAuth";
 import SignInForm, { MAX_USERNAME_LENGTH, USERNAME_QUERY_PARAM } from "./SignInForm";
 
 const MAX_NAME_LENGTH = MAX_USERNAME_LENGTH;
@@ -15,7 +16,7 @@ interface Profile {
 interface Props {
   user: User | null;
   accessToken: string | undefined;
-  signInWithEmail: (email: string, redirectTo?: string) => Promise<string | null>;
+  signInWithEmail: (email: string, redirectTo: string, redirectToForNewAccount?: string) => Promise<SignInResult>;
   signOut: () => void;
 }
 
@@ -129,9 +130,17 @@ export default function AuthPanel({ user, accessToken, signInWithEmail, signOut 
           <div className="modal">
             <h3>Sign in to appear on the leaderboard</h3>
             <SignInForm
-              onSubmit={(email, username) =>
-                signInWithEmail(email, `${window.location.origin}?${USERNAME_QUERY_PARAM}=${encodeURIComponent(username)}`)
-              }
+              onSubmit={(email, username) => {
+                // The existing-user redirect deliberately carries no
+                // username -- see useAuth.ts's signInWithEmail, which tries
+                // this one first and never reaches the second (username-
+                // bearing) redirect for an account that already exists.
+                const redirectTo = window.location.origin;
+                const redirectToForNewAccount = username
+                  ? `${window.location.origin}?${USERNAME_QUERY_PARAM}=${encodeURIComponent(username)}`
+                  : undefined;
+                return signInWithEmail(email, redirectTo, redirectToForNewAccount);
+              }}
               onClose={() => setShowSignIn(false)}
             />
           </div>
