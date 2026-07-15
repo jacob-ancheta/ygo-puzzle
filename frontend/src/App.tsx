@@ -18,6 +18,7 @@ import { USERNAME_QUERY_PARAM } from "./components/SignInForm";
 import { idleOptionLabel, nonCardOptions } from "./interaction";
 import { LOC, POS, TYPE_FIELD, guessOpenZones, type BoardState, type ZoneCard } from "./boardState";
 import { API_URL, WS_URL } from "./config";
+import { msUntilNextRotation } from "./resetTime";
 import type { CardRef, IdleBattleOption } from "./protocol";
 
 const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place", "chain"]);
@@ -109,6 +110,25 @@ export default function App() {
     wasSignedInRef.current = user !== null;
     if (justSignedIn) connect();
   }, [user, connect]);
+
+  // Auto-reconnect the instant today's puzzle rotates (see ResetCountdown,
+  // which shares this same boundary) -- without this, a tab left open past
+  // midnight Eastern would just silently keep playing/showing yesterday's
+  // puzzle until the player manually refreshed. Deliberately reconnects
+  // unconditionally, mid-attempt or not: a puzzle-of-the-day is meant to
+  // become a new puzzle-of-the-day the moment the day turns over, same as
+  // reloading the page would get you.
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    function scheduleNext() {
+      // +1s past the exact boundary so the backend's own "today" (computed
+      // independently, server-side, off its own clock) has unambiguously
+      // rolled over by the time this fires.
+      timeoutId = setTimeout(() => { connect(); scheduleNext(); }, msUntilNextRotation() + 1000);
+    }
+    scheduleNext();
+    return () => clearTimeout(timeoutId);
+  }, [connect]);
 
   // WinModal's "Sign In" button embeds the claim token directly in the
   // magic-link's redirect URL (see WinModal.tsx's handleSignIn) --

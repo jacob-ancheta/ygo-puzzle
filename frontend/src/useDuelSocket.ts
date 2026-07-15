@@ -6,6 +6,15 @@ export interface DuelError {
   suggestions?: Record<string, { code: number; name: string }[]>;
 }
 
+// A closed/errored socket retries this many times, with linear backoff
+// (RETRY_BASE_MS * attempt number), before giving up and just sitting
+// disconnected for the player to manually hit Restart -- covers a
+// transient hiccup (a backend restart/redeploy landing mid-connect, most
+// commonly right around the daily puzzle rotation, or a flaky network
+// blip) without retrying forever against a genuinely dead backend.
+const MAX_AUTO_RETRIES = 5;
+const RETRY_BASE_MS = 1500;
+
 export function useDuelSocket(url: string, getToken?: () => string | undefined) {
   const [board, setBoard] = useState<BoardState>(createInitialBoard());
   const [prompt, setPrompt] = useState<Record<string, unknown> | null>(null);
@@ -16,24 +25,48 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
   // React StrictMode double-mount, whose close() is async) can tell their
   // own messages apart from the socket that superseded them and no-op.
   const generationRef = useRef(0);
+  // Consecutive auto-retry count for the *current* generation -- reset by
+  // every explicit connect() (a fresh attempt, e.g. the player clicking
+  // Restart, or App.tsx's daily-rotation reconnect) and by every successful
+  // onopen, so a later genuinely-transient failure gets its own full
+  // MAX_AUTO_RETRIES budget rather than inheriting an exhausted one.
+  const retryCountRef = useRef(0);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
+    if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
     wsRef.current?.close();
     setBoard(createInitialBoard());
     setPrompt(null);
     setError(null);
 
     const generation = ++generationRef.current;
-    const token = getToken?.();
-    const fullUrl = token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
-    const ws = new WebSocket(fullUrl);
-    wsRef.current = ws;
+    retryCountRef.current = 0;
 
-    ws.onopen = () => { if (generationRef.current === generation) setConnected(true); };
-    ws.onclose = () => { if (generationRef.current === generation) setConnected(false); };
-    ws.onerror = () => { if (generationRef.current === generation) setConnected(false); };
+    const open = () => {
+      const token = getToken?.();
+      const fullUrl = token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
+      const ws = new WebSocket(fullUrl);
+      wsRef.current = ws;
 
-    ws.onmessage = (raw) => {
+      ws.onopen = () => {
+        if (generationRef.current !== generation) return;
+        retryCountRef.current = 0;
+        setConnected(true);
+      };
+      ws.onclose = () => {
+        if (generationRef.current !== generation) return;
+        setConnected(false);
+        if (retryCountRef.current >= MAX_AUTO_RETRIES) return;
+        retryCountRef.current += 1;
+        retryTimeoutRef.current = setTimeout(open, RETRY_BASE_MS * retryCountRef.current);
+      };
+      ws.onerror = () => { if (generationRef.current === generation) setConnected(false); };
+
+      ws.onmessage = onMessage;
+    };
+
+    function onMessage(raw: MessageEvent) {
       if (generationRef.current !== generation) return;
       const item = JSON.parse(raw.data as string);
 
@@ -49,7 +82,9 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
       } else if (item.type === "prompt") {
         setPrompt(item);
       }
-    };
+    }
+
+    open();
     // getToken is included so a fresh sign-in/out is reflected on the *next*
     // connect() call -- omitting it would let this closure keep reading
     // whatever session existed when this callback was first created.
@@ -57,7 +92,10 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
 
   useEffect(() => {
     connect();
-    return () => wsRef.current?.close();
+    return () => {
+      wsRef.current?.close();
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
