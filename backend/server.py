@@ -19,10 +19,12 @@ handler or on the default (multi-worker) executor:
 """
 import asyncio
 import os
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
-from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -61,7 +63,22 @@ ENGINE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ygo-engi
 CARD_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "card_images")
 os.makedirs(os.path.join(CARD_IMAGES_DIR, "full"), exist_ok=True)
 os.makedirs(os.path.join(CARD_IMAGES_DIR, "cropped"), exist_ok=True)
-app.mount("/card_images", StaticFiles(directory=CARD_IMAGES_DIR), name="card_images")
+
+
+class ImmutableStaticFiles(StaticFiles):
+    """StaticFiles plus a long-lived Cache-Control header. Card art never
+    changes for a given card code (the filename IS the code), so without
+    this browsers fall back to Starlette's ETag/Last-Modified handling and
+    still revalidate every image on every page load -- a full round trip
+    per card at reset-rush time, all for a guaranteed 304."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+app.mount("/card_images", ImmutableStaticFiles(directory=CARD_IMAGES_DIR), name="card_images")
 
 
 async def run_blocking(func, *args):
@@ -71,13 +88,16 @@ async def run_blocking(func, *args):
 
 @app.get("/")
 def health():
+    # public_dates, not available_dates: puzzles are authored ahead of time,
+    # and listing future dates here would both announce that tomorrow's file
+    # exists and hand over the exact ?date= to request it with.
     return {"status": "ok", "today": puzzle_registry.today_str(),
-            "available_dates": puzzle_registry.available_dates()}
+            "available_dates": puzzle_registry.public_dates()}
 
 
 @app.get("/puzzles")
 def list_puzzles():
-    return {"today": puzzle_registry.today_str(), "dates": puzzle_registry.available_dates()}
+    return {"today": puzzle_registry.today_str(), "dates": puzzle_registry.public_dates()}
 
 
 @app.get("/notice")
@@ -173,7 +193,35 @@ async def claim_win(body: ClaimWinRequest, authorization: str = Header(default="
     puzzle_date = claim_token.verify_claim_token(body.token)
     if puzzle_date is None:
         return JSONResponse({"error": "invalid or expired claim"}, status_code=400)
-    result = await leaderboard.record_win(user_id, puzzle_date)
+
+    # One leaderboard spot per token, across ALL accounts -- record_win
+    # already ignores retries per (user, date), which covers the same
+    # account redeeming twice, but without this a shared/forwarded token
+    # could hand a win to every account that posts it. First-writer-wins via
+    # the claimed_tokens primary key (see leaderboard.try_claim_token);
+    # deliberately fails open (claimed=None) if the table doesn't exist yet
+    # so the claim flow keeps working before that migration runs.
+    t_hash = claim_token.token_hash(body.token)
+    try:
+        claimed = await leaderboard.try_claim_token(t_hash, user_id)
+    except Exception as e:
+        print(f"[claim_win] try_claim_token failed for user_id={user_id!r}: {e!r}")
+        claimed = None
+    if claimed is False:
+        return JSONResponse({"error": "this win was already claimed by another account"}, status_code=409)
+
+    try:
+        result = await leaderboard.record_win(user_id, puzzle_date)
+    except Exception as e:
+        print(f"[claim_win] record_win failed for user_id={user_id!r} date={puzzle_date!r}: {e!r}")
+        if claimed:
+            # Don't permanently burn a legitimate token on a transient
+            # Supabase failure -- let the player retry the claim.
+            try:
+                await leaderboard.release_claim_token(t_hash)
+            except Exception as release_error:
+                print(f"[claim_win] release_claim_token failed: {release_error!r}")
+        return JSONResponse({"error": "couldn't save your win -- try again in a bit"}, status_code=502)
     return {
         "leaderboard": (
             {"rank": result["assigned_rank"], "overall_position": result["overall_position"]}
@@ -191,9 +239,53 @@ class FeedbackRequest(BaseModel):
 MAX_FEEDBACK_LENGTH = 4000
 MAX_EMAIL_LENGTH = 254
 
+# /feedback sends a real email per request with no sign-in required, so a
+# bare curl loop could drain the Resend quota (and flood the inbox). A tiny
+# in-memory per-IP window is enough of a brake for that -- this is abuse
+# throttling for a single-process deploy, not a distributed-rate-limit
+# system (state resets on redeploy, which is fine for this purpose).
+FEEDBACK_RATE_LIMIT = 5
+FEEDBACK_RATE_WINDOW_SECONDS = 600
+_feedback_hits: dict[str, deque] = {}
+
+
+def _client_ip(request: Request) -> str:
+    # Render terminates TLS at its proxy, so request.client is the proxy for
+    # every request -- the real client is in X-Forwarded-For. Take the LAST
+    # entry: proxies append, so the last one was added by Render itself and
+    # can't be spoofed by a client sending its own forged header. Best-effort
+    # (it's a throttle, not a security boundary).
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _feedback_rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    hits = _feedback_hits.setdefault(ip, deque())
+    while hits and now - hits[0] > FEEDBACK_RATE_WINDOW_SECONDS:
+        hits.popleft()
+    if len(hits) >= FEEDBACK_RATE_LIMIT:
+        return True
+    hits.append(now)
+    # Drop dead entries so the dict can't grow unboundedly across many
+    # distinct IPs over weeks of uptime.
+    if len(_feedback_hits) > 1000:
+        stale = [k for k, v in _feedback_hits.items()
+                 if not v or now - v[-1] > FEEDBACK_RATE_WINDOW_SECONDS]
+        for stale_ip in stale:
+            del _feedback_hits[stale_ip]
+    return False
+
 
 @app.post("/feedback")
-async def submit_feedback(body: FeedbackRequest):
+async def submit_feedback(body: FeedbackRequest, request: Request):
+    if _feedback_rate_limited(_client_ip(request)):
+        return JSONResponse(
+            {"error": "too many submissions -- please wait a few minutes and try again"},
+            status_code=429,
+        )
     message = body.message.strip()
     if not message or len(message) > MAX_FEEDBACK_LENGTH:
         return JSONResponse(
@@ -220,12 +312,28 @@ async def submit_feedback(body: FeedbackRequest):
     return {"ok": True}
 
 
+# Every connection owns a live native duel (C++ state + a Lua VM) for its
+# whole lifetime, so an unbounded number of sockets is an unbounded amount
+# of native memory -- trivially exhaustible by a script opening connections
+# and never responding to prompts. Plain int mutated only from the (single)
+# event-loop thread, so no locking needed.
+MAX_CONCURRENT_DUELS = int(os.environ.get("MAX_CONCURRENT_DUELS", "200"))
+_active_duels = 0
+
+
 @app.websocket("/ws")
 async def duel_socket(websocket: WebSocket):
+    global _active_duels
     await websocket.accept()
     date_param = websocket.query_params.get("date")
     token_param = websocket.query_params.get("token")
     user_id = await verify_supabase_jwt(token_param)
+
+    if _active_duels >= MAX_CONCURRENT_DUELS:
+        await websocket.send_json({"type": "error",
+                                    "message": "the server is at capacity right now -- try again in a minute"})
+        await websocket.close()
+        return
 
     try:
         resolved_date, puzzle = puzzle_registry.resolve_puzzle_for(date_param)
@@ -240,6 +348,7 @@ async def duel_socket(websocket: WebSocket):
         await websocket.send_json({"type": "error", "message": str(e), "suggestions": e.suggestions})
         await websocket.close()
         return
+    _active_duels += 1
 
     try:
         await websocket.send_json({"type": "event", "event": "puzzle_loaded",
@@ -277,6 +386,13 @@ async def duel_socket(websocket: WebSocket):
                 break
 
             if item.get("type") == "event" and item.get("event") == "win" and item.get("winner") == 0:
+                # Leaderboard/community credit is only ever for THE current
+                # puzzle -- ?date= also serves archived days (and, pre-clamp,
+                # served future ones), and recording those would let anyone
+                # top an old day's board long after the fact. Checked at win
+                # time, not connect time, so a connection deliberately held
+                # across the 4pm rotation can't bank a stale-dated win either.
+                is_current_puzzle = resolved_date == puzzle_registry.today_str()
                 # Community count: every DISTINCT solver counts once. Retries
                 # are unlimited by design (see record_win), so a signed-in
                 # player replaying after already winning must not bump this
@@ -284,14 +400,14 @@ async def duel_socket(websocket: WebSocket):
                 # Anonymous wins still can't be deduped (no stable identity)
                 # and always increment, same as before.
                 is_repeat_signed_in_win = False
-                if user_id is not None:
+                if user_id is not None and is_current_puzzle:
                     try:
                         is_repeat_signed_in_win = await leaderboard.already_recorded(user_id, resolved_date)
                     except Exception as e:
                         print(f"[duel_socket] already_recorded check failed for user_id={user_id!r} date={resolved_date!r}: {e!r}")
 
                 community_position = None
-                if not is_repeat_signed_in_win:
+                if is_current_puzzle and not is_repeat_signed_in_win:
                     try:
                         community_position = await leaderboard.record_completion(resolved_date)
                     except Exception as e:
@@ -299,9 +415,9 @@ async def duel_socket(websocket: WebSocket):
                 item["community_position"] = community_position
 
                 # The real, tamper-resistant leaderboard -- only for
-                # signed-in connections.
+                # signed-in connections, only for the current puzzle.
                 result = None
-                if user_id is not None:
+                if user_id is not None and is_current_puzzle:
                     try:
                         result = await leaderboard.record_win(user_id, resolved_date)
                     except Exception as e:
@@ -319,9 +435,15 @@ async def duel_socket(websocket: WebSocket):
                 # Lets an anonymous winner claim this exact win later, after
                 # signing in, without replaying the puzzle -- see
                 # claim_token.py. None (and the frontend just won't offer the
-                # claim path) if CLAIM_TOKEN_SECRET isn't configured, or if
-                # this connection was already signed in and doesn't need it.
-                item["claim_token"] = claim_token.make_claim_token(resolved_date) if user_id is None else None
+                # claim path) if CLAIM_TOKEN_SECRET isn't configured, if
+                # this connection was already signed in and doesn't need it,
+                # or if this wasn't the current puzzle (same gate as the
+                # direct record_win path above -- a token for an archived
+                # date would be a back door around it).
+                item["claim_token"] = (
+                    claim_token.make_claim_token(resolved_date)
+                    if user_id is None and is_current_puzzle else None
+                )
 
             await websocket.send_json(item)
             if item["type"] == "prompt":
@@ -337,6 +459,7 @@ async def duel_socket(websocket: WebSocket):
         # error for every ordinary restart.
         pass
     finally:
+        _active_duels -= 1
         # Routed through the same single-worker executor as every other
         # engine call (not called directly here) -- close() now also calls
         # into the C library (lib.end_duel(), see duel_engine.py) to release

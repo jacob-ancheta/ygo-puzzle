@@ -8,7 +8,7 @@ delivery).
 """
 import os
 
-import httpx
+from http_client import client
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 # Must be an address on a domain verified in the Resend dashboard --
@@ -36,11 +36,10 @@ async def send_feedback_email(kind: str, message: str, contact_email: str | None
     }
     if contact_email:
         payload["reply_to"] = contact_email
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.post(
-            "https://api.resend.com/emails",
-            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-            json=payload,
-        )
-        resp.raise_for_status()
+    resp = await client.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+        json=payload,
+    )
+    resp.raise_for_status()
     return True
