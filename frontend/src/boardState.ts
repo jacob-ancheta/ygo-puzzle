@@ -26,6 +26,11 @@ export const FIELD_ZONE_SEQ = 5;
 
 export interface ZoneCard extends CardRef {
   position?: number;
+  // Attached Xyz materials, if any -- only ever populated for Monster Zone
+  // cards, refreshed from query_live_stats() (see duel_engine.py) alongside
+  // live ATK/DEF after any summon and after any chain resolves (covering
+  // material-detaching costs).
+  materials?: CardRef[];
 }
 
 export interface BoardState {
@@ -336,7 +341,8 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
     }
 
     case "stats_update": {
-      const updates = item.cards as { controller: number; sequence: number; attack: number; defense: number }[];
+      const updates = item.cards as
+        { controller: number; sequence: number; attack: number; defense: number; materials: CardRef[] }[];
       const zones = { ...board.zones };
       for (const u of updates) {
         const key = zoneKey(u.controller, LOC.MZONE, u.sequence);
@@ -346,7 +352,7 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
         // them, which would otherwise clobber the "hide DEF" convention
         // (existing.defense left undefined/-1) used elsewhere for display.
         const isLink = existing.type !== undefined && (existing.type & TYPE_LINK) !== 0;
-        zones[key] = { ...existing, attack: u.attack, ...(isLink ? {} : { defense: u.defense }) };
+        zones[key] = { ...existing, attack: u.attack, materials: u.materials, ...(isLink ? {} : { defense: u.defense }) };
       }
       return { ...board, zones };
     }

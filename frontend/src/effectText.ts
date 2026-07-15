@@ -42,30 +42,69 @@ export function yesNoText(cardCode: number | undefined, desc: number | undefined
   return YESNO_TEXT[`${cardCode}:${desc}`] ?? null;
 }
 
-// Curated text for MSG_SELECT_OPTION ("activate 1 of these effects") prompts.
-// Like YESNO_TEXT above, the engine only hands the client opaque numeric
-// desc ids for these -- and for this prompt it doesn't even forward which
-// card is asking (see duel_engine.py's MSG_SELECT_OPTION handler), so the
-// caller has to fall back to the currently-resolving chain card.
-//
-// Keyed by the script's own aux.Stringid *local offset* (desc = card.code*16
-// + offset), not by array position: a card's script only calls
-// Duel.SelectOption with the subset of effects that are currently legal
-// (see e.g. c40044918.lua's sel==1/2/3 branches), so the offered options'
-// positions shift depending on board state. The offset is stable regardless
-// -- it's how PromptOverlay both labels the right effect for a partial offer
-// and knows which of a card's *other* named effects to show, disabled, when
-// this turn didn't offer them.
-const OPTION_TEXT: Record<number, Record<number, string>> = {
-  // Elemental HERO Stratos -- offset 0 is the shared "activate 1 of these
-  // effects" trigger description (not one of the two choices below).
-  40044918: {
-    1: "Destroy Spells/Traps on the field, up to the number of \"HERO\" monsters you control, except this card",
-    2: "Add 1 \"HERO\" monster from your Deck to your hand",
-  },
-};
+// Text for MSG_SELECT_OPTION ("activate 1 of these effects") prompts,
+// parsed straight from the resolving card's own `desc` -- unlike
+// YESNO_TEXT above, this needs no per-card entry: cards.db already formats
+// this exact pattern as bullet-prefixed lines in the official text (e.g.
+// Stratos: "You can activate 1 of these effects; [bullet] Destroy... [bullet]
+// Add..."), so splitting on that bullet character gets the real option text
+// for *any* such card automatically. See mapOptionsToBullets below for the
+// one scenario (a partial offer on a card with no separate "activate 1 of
+// these effects" description of its own) this can't fully disambiguate.
+const BULLET = "●";
 
-export function optionText(cardCode: number | undefined): Record<number, string> | null {
-  if (cardCode === undefined) return null;
-  return OPTION_TEXT[cardCode] ?? null;
+export function optionBullets(desc: string | undefined): string[] {
+  if (!desc) return [];
+  return desc
+    .split(BULLET)
+    .slice(1) // part 0 is the lead-in sentence before the first bullet
+    .map((s) => s.split("\t")[0].trim()) // drop trailing restriction text (e.g. "\tYou can only use this effect... once per turn.")
+    .filter((s) => s.length > 0);
+}
+
+// Learned per card code: the local offset (see mapOptionsToBullets) of that
+// card's first bullet, once actually observed. A card's script only calls
+// Duel.SelectOption with the subset of effects currently legal, so a
+// *partial* offer's local-offset numbering is ambiguous on its own --
+// whether local offset 0 is the first bullet, or reserved for a separate
+// "you can activate 1 of these effects" trigger description with the real
+// options starting at 1 (as with Stratos: see c40044918.lua) -- both are
+// common conventions and cards.db has no field for which one a given card
+// uses. A *full* offer (every bullet legal at once) has no such ambiguity
+// -- it can only be zipped one way -- so it doubles as ground truth for
+// that card's convention, cached here for any partial offer of the same
+// card later in the session.
+//
+// Seeded with cards confirmed live against the real engine, since a puzzle
+// can plausibly *only* ever offer a partial subset of a given card's
+// options (e.g. Stratos here: the opposing field never has a Spell/Trap to
+// destroy in the puzzle this was checked against, so the "destroy" bullet
+// is never legal and a full offer is never observed to learn from) --
+// without a seed, that card would never get bullet text at all despite
+// having it, since the ambiguous case is deliberately left unmapped rather
+// than guessed. Every other card still works with zero entries here; add
+// one only if the same "partial-only" situation gets reported again.
+const learnedBaseOffset = new Map<number, number>([
+  [40044918, 1], // Elemental HERO Stratos -- offset 0 is its own trigger description, not a bullet
+]);
+
+/**
+ * Maps each offered option's raw wire index to a bullet index in `bullets`,
+ * or null where the mapping can't be determined confidently (see above) --
+ * callers should treat "any nulls" as "don't trust this mapping" rather
+ * than showing a wrong bullet as available/unavailable, which would be
+ * actively misleading rather than merely less helpful.
+ */
+export function mapOptionsToBullets(cardCode: number | undefined, descs: number[], bullets: string[]): (number | null)[] {
+  if (descs.length === bullets.length) {
+    if (cardCode !== undefined) {
+      learnedBaseOffset.set(cardCode, Math.min(...descs.map((d) => d - cardCode * 16)));
+    }
+    return descs.map((_, i) => i);
+  }
+  if (cardCode === undefined) return descs.map(() => null);
+  const base = learnedBaseOffset.get(cardCode);
+  if (base === undefined) return descs.map(() => null);
+  const offsets = descs.map((d) => d - cardCode * 16);
+  return offsets.map((o) => (o - base >= 0 && o - base < bullets.length ? o - base : null));
 }

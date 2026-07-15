@@ -32,7 +32,13 @@ interface Props {
   // instead of layering on top of the notice.
   prompt: Record<string, unknown> | null;
   selection: number[];
-  onCardMenu: (card: CardRef, options: ReturnType<typeof idleBattleOptionsFor>, x: number, y: number) => void;
+  onCardMenu: (
+    card: CardRef,
+    options: ReturnType<typeof idleBattleOptionsFor>,
+    x: number,
+    y: number,
+    materials?: CardRef[],
+  ) => void;
   onSelectToggle: (idx: number) => void;
   onUnselectChoice: (idx: number) => void;
   onPlaceChoice: (idx: number) => void;
@@ -404,8 +410,9 @@ function ZoneCardSlot({
   enlarged?: boolean;
   chainLinkBadge?: number;
 }) {
-  const idleBattleOptions = idleBattleOptionsFor(prompt, card.code);
-  const actionable = idleBattleOptions.length > 0;
+  const idleBattleOptions = idleBattleOptionsFor(prompt, card.code, loc);
+  const hasMaterials = (card.materials?.length ?? 0) > 0;
+  const actionable = idleBattleOptions.length > 0 || hasMaterials;
 
   const selectIdx = matchCardIndex(prompt, card.code, loc);
   const isUnselectPrompt = prompt?.prompt === "select_unselect";
@@ -433,7 +440,7 @@ function ZoneCardSlot({
   const handleClick = (e: MouseEvent) => {
     if (!isFaceDown) onCardDetail(card);
     if (actionable) {
-      onCardMenu(card, idleBattleOptions, e.clientX, e.clientY);
+      onCardMenu(card, idleBattleOptions, e.clientX, e.clientY, card.materials);
     } else if (selectable) {
       if (isUnselectPrompt) onUnselectChoice(selectIdx as number);
       else onSelectToggle(selectIdx as number);

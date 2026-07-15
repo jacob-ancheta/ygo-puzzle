@@ -57,6 +57,10 @@ export interface IdleBattleOption {
   index: number;
   action: string;
   card?: CardRef;
+  // Which physical card this option is for -- present whenever `card` is,
+  // and needed to tell apart multiple copies of the same card (e.g. 2 in
+  // hand), which otherwise share a `card.code` and would be indistinguishable.
+  location?: { controller: number; location_id: number; sequence: number };
   desc?: number;
   can_attack_directly?: boolean;
 }
