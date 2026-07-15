@@ -15,7 +15,7 @@ import FeedbackModal from "./components/FeedbackModal";
 import LossModal from "./components/LossModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { USERNAME_QUERY_PARAM } from "./components/SignInForm";
-import { nonCardOptions } from "./interaction";
+import { idleOptionLabel, nonCardOptions } from "./interaction";
 import { LOC, TYPE_FIELD, guessOpenZones, type BoardState } from "./boardState";
 import { API_URL, WS_URL } from "./config";
 import type { CardRef, IdleBattleOption } from "./protocol";
@@ -66,6 +66,7 @@ function placementLabel(action: string, isFieldSpell: boolean): string {
 interface MenuState {
   card?: CardRef;
   options: { option: IdleBattleOption; idx: number }[];
+  materials?: CardRef[];
   x: number;
   y: number;
 }
@@ -459,22 +460,39 @@ export default function App() {
   const isBoardPrompt = effectivePromptKind !== undefined && BOARD_PROMPTS.has(effectivePromptKind);
   const isModalPrompt = effectivePrompt !== null && !isBoardPrompt;
 
-  function handleCardMenu(card: CardRef, options: { option: IdleBattleOption; idx: number }[], x: number, y: number) {
-    if (options.length === 1) {
-      const { option, idx } = options[0];
-      if (isPlacementAction(option.action)) {
-        startPlacement(card, idx, option.action);
-        return;
-      }
-      if (needsConfirm(option.action)) {
-        setConfirmAction({ label: confirmLabel(option.action, card.name), action: option.action, idx, card });
-        return;
-      }
-      setCommittedCard(card);
-      respond({ choice: idx });
+  function dispatchIdleChoice(card: CardRef, option: IdleBattleOption, idx: number) {
+    if (isPlacementAction(option.action)) {
+      startPlacement(card, idx, option.action);
       return;
     }
-    setMenu({ card, options, x, y });
+    if (needsConfirm(option.action)) {
+      setConfirmAction({ label: confirmLabel(option.action, card.name), action: option.action, idx, card });
+      return;
+    }
+    setCommittedCard(card);
+    respond({ choice: idx });
+  }
+
+  function handleCardMenu(
+    card: CardRef,
+    options: { option: IdleBattleOption; idx: number }[],
+    x: number,
+    y: number,
+    materials?: CardRef[],
+  ) {
+    const hasMaterials = (materials?.length ?? 0) > 0;
+    // A field monster with neither an activatable effect nor materials
+    // right now falls straight through here with nothing to do -- callers
+    // only invoke onCardMenu when there's at least one of the two.
+    if (options.length === 0 && hasMaterials) {
+      setPileView({ label: `${card.name}'s Materials`, cards: materials as CardRef[] });
+      return;
+    }
+    if (options.length === 1 && !hasMaterials) {
+      dispatchIdleChoice(card, options[0].option, options[0].idx);
+      return;
+    }
+    setMenu({ card, options, materials, x, y });
   }
 
   function handleSelectToggle(idx: number) {
@@ -790,31 +808,28 @@ export default function App() {
         <ActionMenu
           x={menu.x}
           y={menu.y}
-          items={menu.options}
-          disableOutsideClose={confirmAction !== null}
-          onChoose={(idx) => {
-            const chosen = menu.options.find((o) => o.idx === idx);
-            if (chosen && isPlacementAction(chosen.option.action)) {
-              const c = chosen.option.card ?? menu.card;
-              if (c) {
-                startPlacement(c, idx, chosen.option.action);
+          items={[
+            ...(menu.materials && menu.materials.length > 0
+              ? [{
+                  key: "materials",
+                  label: "View Materials",
+                  onClick: () => {
+                    setPileView({ label: `${menu.card?.name ?? "Card"}'s Materials`, cards: menu.materials as CardRef[] });
+                    setMenu(null);
+                  },
+                }]
+              : []),
+            ...menu.options.map(({ option, idx }) => ({
+              key: idx,
+              label: idleOptionLabel(option),
+              onClick: () => {
+                const c = option.card ?? menu.card;
+                if (c) dispatchIdleChoice(c, option, idx);
                 setMenu(null);
-                return;
-              }
-            }
-            if (chosen && needsConfirm(chosen.option.action)) {
-              setConfirmAction({
-                label: confirmLabel(chosen.option.action, chosen.option.card?.name ?? "this card"),
-                action: chosen.option.action,
-                idx,
-                card: chosen.option.card ?? menu.card,
-              });
-              return;
-            }
-            if (chosen?.option.card ?? menu.card) setCommittedCard(chosen?.option.card ?? menu.card ?? null);
-            respond({ choice: idx });
-            setMenu(null);
-          }}
+              },
+            })),
+          ]}
+          disableOutsideClose={confirmAction !== null}
           onClose={() => setMenu(null)}
         />
       )}

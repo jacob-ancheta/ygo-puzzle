@@ -23,12 +23,54 @@ export const ACTION_LABELS: Record<string, string> = {
   main_phase_2: "Main Phase 2",
 };
 
-export function idleBattleOptionsFor(prompt: Record<string, unknown> | null, code: number) {
+/** Menu label for one idle/battle option -- "Activate Effect" (rather than
+ * the bare "Activate" used for e.g. a hand Spell/Trap) specifically for a
+ * field monster's own ignition effect, since that's the wording a field
+ * monster's action menu (see ZoneCardSlot) uses. */
+export function idleOptionLabel(option: IdleBattleOption): string {
+  const isFieldMonsterActivate = (option.action === "Activate" || option.action === "activate")
+    && option.location?.location_id === LOC.MZONE;
+  const label = isFieldMonsterActivate ? "Activate Effect" : (ACTION_LABELS[option.action] ?? option.action);
+  return option.can_attack_directly ? `${label} (direct ok)` : label;
+}
+
+function dedupeByCategory(matches: { option: IdleBattleOption; idx: number }[]) {
+  const seen = new Set<number>();
+  return matches.filter(({ option }) => {
+    if (seen.has(option.category)) return false;
+    seen.add(option.category);
+    return true;
+  });
+}
+
+/**
+ * Idle/battle options offered for one specific card. Matching by `code`
+ * alone isn't enough: 2 copies of the same card in hand each get their own
+ * Summon/Set entry (same code), so without a location to disambiguate,
+ * clicking *either* copy would surface all of both copies' entries at once
+ * ("Summon Summon Set Set").
+ *
+ * `loc`, when given, narrows to the clicked card's own entries. Field zones
+ * (Monster/Spell-Trap) have a stable identity, so an exact location match
+ * correctly keeps 2 identical field cards' options separate. Hand cards
+ * don't: the engine shuffles hand order internally while the client's
+ * display stays cosmetic (see matchCardIndex's identical caveat), so a hand
+ * card's sequence can't be trusted to mean "this physical copy" -- and
+ * since identical hand copies are functionally interchangeable anyway, they
+ * fall back to deduping by action instead of pinpointing one copy.
+ */
+export function idleBattleOptionsFor(prompt: Record<string, unknown> | null, code: number, loc?: Loc) {
   if (!prompt || (prompt.prompt !== "idlecmd" && prompt.prompt !== "battlecmd")) return [];
   const options = prompt.options as IdleBattleOption[];
-  return options
+  const matches = options
     .map((option, idx) => ({ option, idx }))
     .filter(({ option }) => option.card && option.card.code === code);
+  if (!loc || loc.location_id === LOC.HAND) return dedupeByCategory(matches);
+  const exact = matches.filter(({ option }) => option.location
+    && option.location.controller === loc.controller
+    && option.location.location_id === loc.location_id
+    && option.location.sequence === loc.sequence);
+  return exact.length > 0 ? exact : dedupeByCategory(matches);
 }
 
 export function nonCardOptions(prompt: Record<string, unknown> | null) {

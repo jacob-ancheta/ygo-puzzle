@@ -197,7 +197,7 @@ LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE, LOCATION_EXTRA = 0
 LOCATION_REMOVED = 0x20
 LOCATION_GY = 0x10
 POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE = 0x1, 0x4
-QUERY_ATTACK, QUERY_DEFENSE = 0x100, 0x200
+QUERY_ATTACK, QUERY_DEFENSE, QUERY_OVERLAY_CARD = 0x100, 0x200, 0x10000
 TYPE_LINK = 0x4000000
 DUEL_ATTACK_FIRST_TURN = 0x02  # puzzles are constructed positions, not turn 1 of a real match --
                                 # without this, the engine correctly (but unhelpfully) blocks
@@ -529,17 +529,21 @@ def card_brief(code):
 
 
 def query_live_stats(engine):
-    """Snapshot the current (post-effect) ATK/DEF of every monster in both
-    Monster Zones. card_brief() only has the printed/base stats from
-    cards.db, which don't reflect in-duel modifications -- stat-boost
-    effects, "double this card's ATK" effects, Link Monster continuous
-    effects on the opponent's stats, etc. -- so the client needs this to
-    display those correctly."""
+    """Snapshot the current (post-effect) ATK/DEF -- and attached Xyz
+    materials -- of every monster in both Monster Zones. card_brief() only
+    has the printed/base stats from cards.db, which don't reflect in-duel
+    modifications -- stat-boost effects, "double this card's ATK" effects,
+    Link Monster continuous effects on the opponent's stats, etc. -- so the
+    client needs this to display those correctly. Materials are included
+    here (rather than a separate query) since both are needed at the same
+    moments -- after any summon and after any chain resolves, the latter
+    covering material-detaching costs -- see this function's call sites."""
     results = []
     for controller in (0, 1):
         buf = (ctypes.c_ubyte * 4096)()
         n = lib.query_field_card(ctypes.c_ssize_t(engine.pduel), ctypes.c_uint8(controller),
-                                  ctypes.c_uint8(LOCATION_MZONE), ctypes.c_uint32(QUERY_ATTACK | QUERY_DEFENSE),
+                                  ctypes.c_uint8(LOCATION_MZONE),
+                                  ctypes.c_uint32(QUERY_ATTACK | QUERY_DEFENSE | QUERY_OVERLAY_CARD),
                                   buf, ctypes.c_int32(0))
         offset = 0
         sequence = 0
@@ -551,7 +555,13 @@ def query_live_stats(engine):
                 continue
             attack = int.from_bytes(bytes(buf[offset + 8:offset + 12]), "little", signed=True)
             defense = int.from_bytes(bytes(buf[offset + 12:offset + 16]), "little", signed=True)
-            results.append({"controller": controller, "sequence": sequence, "attack": attack, "defense": defense})
+            material_count = int.from_bytes(bytes(buf[offset + 16:offset + 20]), "little")
+            materials = [
+                card_brief(int.from_bytes(bytes(buf[offset + 20 + 4 * i:offset + 24 + 4 * i]), "little"))
+                for i in range(material_count)
+            ]
+            results.append({"controller": controller, "sequence": sequence, "attack": attack, "defense": defense,
+                             "materials": materials})
             offset += length
             sequence += 1
     return results
@@ -1186,15 +1196,17 @@ def run(engine):
                 n = stream.u8()
                 items = []
                 for _ in range(n):
-                    code = stream.u32(); stream.u8(); stream.u8(); stream.u8()
-                    items.append(code)
+                    code = stream.u32()
+                    controller = stream.u8(); location = stream.u8(); sequence = stream.u8()
+                    items.append((code, controller, location, sequence))
                 categories.append(items)
             n_activate = stream.u8()
             activate_items = []
             for _ in range(n_activate):
                 code = stream.u32() & 0x7fffffff
-                stream.u8(); stream.u8(); stream.u8(); stream.u32()
-                activate_items.append(code)
+                controller = stream.u8(); location = stream.u8(); sequence = stream.u8()
+                stream.u32()
+                activate_items.append((code, controller, location, sequence))
             categories.append(activate_items)
             to_bp = stream.u8()
             to_ep = stream.u8()
@@ -1202,9 +1214,16 @@ def run(engine):
 
             options = []
             for cat_i, label in enumerate(IDLE_ACTION_NAMES[:6]):
-                for item_i, code in enumerate(categories[cat_i] if cat_i < 6 else []):
+                for item_i, (code, controller, location, sequence) in enumerate(categories[cat_i] if cat_i < 6 else []):
+                    # Distinguishes multiple copies of the same card (e.g. 2
+                    # in hand) -- without this, the frontend can only filter
+                    # idle options by card code, so clicking either copy
+                    # would surface *both* copies' Summon/Set entries at
+                    # once (see interaction.ts's idleBattleOptionsFor).
                     options.append({"category": cat_i, "index": item_i, "action": label,
-                                     "card": card_brief(code)})
+                                     "card": card_brief(code),
+                                     "location": {"controller": controller, "location_id": location,
+                                                  "sequence": sequence}})
             if to_bp:
                 options.append({"category": 6, "index": 0, "action": "battle_phase"})
             if to_ep:
