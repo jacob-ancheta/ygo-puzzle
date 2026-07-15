@@ -35,6 +35,13 @@ def make_claim_token(puzzle_date: str) -> str | None:
     return f"{puzzle_date}.{expiry}.{_sign(puzzle_date, expiry)}"
 
 
+def token_hash(token: str) -> str:
+    """Stable hash used as the claimed_tokens primary key (see
+    leaderboard.try_claim_token) -- the hash rather than the raw token, so a
+    read of that table never hands anyone a still-redeemable token."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def verify_claim_token(token: str) -> str | None:
     """Returns the puzzle_date the token is valid for, or None if the token
     is missing, malformed, expired, or fails signature verification."""

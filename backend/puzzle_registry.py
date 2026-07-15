@@ -29,13 +29,23 @@ _cache = {}
 
 
 def available_dates():
-    """All puzzle dates that exist on disk, ascending."""
+    """All puzzle dates that exist on disk, ascending -- INCLUDING dates in
+    the future (puzzles authored ahead of time). Internal use only; anything
+    exposed to clients must use public_dates() instead, or pre-authored
+    puzzles leak before their day arrives."""
     dates = []
     for fname in os.listdir(PUZZLES_DIR):
         m = DATE_RE.match(fname)
         if m:
             dates.append(m.group(1))
     return sorted(dates)
+
+
+def public_dates():
+    """available_dates() minus anything dated after today (Eastern) -- the
+    only date list that's safe to send to a client."""
+    today = today_str()
+    return [d for d in available_dates() if d <= today]
 
 
 def today_str():
@@ -74,7 +84,19 @@ def resolve_puzzle_for(date_str=None):
     if not dates:
         raise RuntimeError(f"no puzzle files found in {PUZZLES_DIR}")
 
-    target = date_str or today_str()
+    today = today_str()
+    target = date_str or today
+    # Never serve past "today", whatever the client asked for -- puzzles are
+    # authored ahead of time, so without this clamp `?date=9999-12-31` (or
+    # just tomorrow's date, which /puzzles used to happily advertise) would
+    # hand out an unreleased puzzle early.
+    if target > today:
+        target = today
     candidates = [d for d in dates if d <= target]
+    # The bare dates[0] fallback only triggers when NOTHING on disk is dated
+    # today-or-earlier -- i.e. every puzzle file is future-dated. That's a
+    # misconfigured deploy (there's no legitimate way to run a daily-puzzle
+    # site with no current puzzle), and serving the earliest future puzzle
+    # beats hard-failing every connection while it's fixed.
     chosen = candidates[-1] if candidates else dates[0]
     return chosen, load_puzzle(chosen)

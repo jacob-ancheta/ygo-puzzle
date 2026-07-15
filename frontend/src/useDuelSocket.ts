@@ -15,6 +15,12 @@ export interface DuelError {
 const MAX_AUTO_RETRIES = 5;
 const RETRY_BASE_MS = 1500;
 
+// Event names that mean the engine has nothing left to say and server.py's
+// own driver loop is about to return (closing the socket as a normal part of
+// that, not a failure) -- see server.py's duel_socket and duel_engine.py's
+// `run` generator. Mirrors test_client.py's own stop condition.
+const TERMINAL_EVENTS = new Set(["win", "loss", "duel_ended", "unsupported", "unhandled"]);
+
 export function useDuelSocket(url: string, getToken?: () => string | undefined) {
   const [board, setBoard] = useState<BoardState>(createInitialBoard());
   const [prompt, setPrompt] = useState<Record<string, unknown> | null>(null);
@@ -32,6 +38,20 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
   // MAX_AUTO_RETRIES budget rather than inheriting an exhausted one.
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set once a TERMINAL_EVENTS message arrives (see above) -- server.py
+  // closes the socket right after sending one of these as an ordinary part
+  // of the duel being over, not a dropped connection. Without this,
+  // useDuelSocket's own auto-retry (meant for a genuine mid-puzzle network
+  // blip) treated that expected close identically to a real one and quietly
+  // opened a brand-new attempt ~1.5s later -- overwriting `board` with a
+  // freshly reset one. Reproduced live: winning the puzzle would silently
+  // reconnect into a new attempt shortly after, which flips
+  // board.status away from "win" and closes WinModal out from under the
+  // player (App.tsx's showWinModal effect tracks exactly that field) --
+  // first reported as "the sign-in modal closes and the puzzle resets",
+  // since that's usually about when someone has gotten around to clicking
+  // into it.
+  const terminalRef = useRef(false);
 
   const connect = useCallback(() => {
     if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
@@ -42,6 +62,7 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
 
     const generation = ++generationRef.current;
     retryCountRef.current = 0;
+    terminalRef.current = false;
 
     const open = () => {
       const token = getToken?.();
@@ -57,6 +78,7 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
       ws.onclose = () => {
         if (generationRef.current !== generation) return;
         setConnected(false);
+        if (terminalRef.current) return;
         if (retryCountRef.current >= MAX_AUTO_RETRIES) return;
         retryCountRef.current += 1;
         retryTimeoutRef.current = setTimeout(open, RETRY_BASE_MS * retryCountRef.current);
@@ -77,6 +99,7 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
       }
 
       if (item.type === "event") {
+        if (TERMINAL_EVENTS.has(item.event)) terminalRef.current = true;
         setBoard((prev) => applyEvent(prev, item));
         setPrompt(null);
       } else if (item.type === "prompt") {

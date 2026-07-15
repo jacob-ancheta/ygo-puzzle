@@ -16,6 +16,8 @@ import os
 
 import httpx
 
+from http_client import client
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
@@ -26,11 +28,10 @@ async def verify_supabase_jwt(token: str | None) -> str | None:
     if not token or not SUPABASE_URL or not SERVICE_ROLE_KEY:
         return None
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                f"{SUPABASE_URL}/auth/v1/user",
-                headers={"Authorization": f"Bearer {token}", "apikey": SERVICE_ROLE_KEY},
-            )
+        resp = await client.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={"Authorization": f"Bearer {token}", "apikey": SERVICE_ROLE_KEY},
+        )
     except httpx.HTTPError:
         return None
     if resp.status_code != 200:
