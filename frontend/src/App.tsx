@@ -479,14 +479,36 @@ export default function App() {
 
   function handleSelectToggle(idx: number) {
     if (!prompt) return;
-    setSelection((prev) => {
-      if (prev.includes(idx)) return prev.filter((i) => i !== idx);
-      const max = prompt.max as number;
-      if (prev.length < max) return [...prev, idx];
-      // Already at the limit -- swap in the new pick instead of requiring
-      // the old one to be manually unselected first.
-      return [...prev.slice(1), idx];
-    });
+    // Not a setSelection(prev => ...) updater -- same reasoning as
+    // handlePlaceChoice below: StrictMode (dev only) double-invokes those,
+    // and respond() living inside one would risk a single click sending the
+    // answer twice.
+    if (selection.includes(idx)) {
+      setSelection(selection.filter((i) => i !== idx));
+      return;
+    }
+    const min = prompt.min as number;
+    const max = prompt.max as number;
+    if (selection.length < max) {
+      const next = [...selection, idx];
+      // A forced exact-count pick (e.g. Tribute Summon's tribute count, or
+      // a Synchro's tuner/non-tuner material step) has no ambiguity about
+      // "am I done" once the count is hit -- skip the extra SelectionBar
+      // Confirm click and answer immediately instead of making the player
+      // select then separately confirm.
+      if (min === max && next.length === max) {
+        respond({ indices: next });
+        setSelection([]);
+      } else {
+        setSelection(next);
+      }
+      return;
+    }
+    // Already at the limit with room to swap (min < max, since the
+    // exact-count case above always empties selection before this could be
+    // reached) -- swap in the new pick instead of requiring the old one to
+    // be manually unselected first.
+    setSelection([...selection.slice(1), idx]);
   }
 
   function handlePlaceChoice(idx: number) {
