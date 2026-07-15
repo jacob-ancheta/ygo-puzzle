@@ -39,7 +39,13 @@ class OpponentAI:
         # resolved: name -> card info dict (code, ...), already computed by
         # duel_engine.resolve_all() for every card named anywhere in the puzzle.
         self.policies = {}
-        for entry in puzzle["opponent_field"]:
+        # opponent_hand entries may be bare names (no policy possible) or
+        # the same dict shape as opponent_field -- both zones' cards can
+        # carry an eff_behaviour, and the policy itself is zone-agnostic
+        # (the engine only ever offers effects that are legal from wherever
+        # the card actually is, e.g. a hand trap from hand).
+        hand_entries = [e for e in puzzle.get("opponent_hand", []) if isinstance(e, dict)]
+        for entry in puzzle["opponent_field"] + hand_entries:
             behaviour = entry.get("eff_behaviour")
             if not behaviour:
                 continue

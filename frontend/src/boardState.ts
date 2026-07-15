@@ -266,7 +266,7 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
         };
       }
       b.zones = zones;
-      b.hand = { 0: item.player_hand as CardRef[], 1: [] };
+      b.hand = { 0: item.player_hand as CardRef[], 1: (item.opponent_hand ?? []) as CardRef[] };
       b.deck = { 0: item.player_deck as CardRef[], 1: 0 };
       b.extra = { 0: item.player_extra as CardRef[], 1: 0 };
       b.banished = { 0: (item.player_banished ?? []) as CardRef[], 1: [] };
