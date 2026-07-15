@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { CardRef } from "../protocol";
 import { POS } from "../boardState";
 import CardTile from "./CardTile";
-import { yesNoText } from "../effectText";
+import { optionText, yesNoText } from "../effectText";
 
 interface Props {
   prompt: Record<string, unknown>;
@@ -51,12 +51,65 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
   }
 
   if (kind === "option") {
-    const options = prompt.options as number[];
+    const rawOptions = prompt.options as number[];
+    const card = (prompt.card as CardRef | undefined) ?? contextCard ?? undefined;
+    const labels = optionText(card?.code);
+
+    if (!labels) {
+      return (
+        <Modal title="Select an option">
+          <div className="modal-list">
+            {rawOptions.map((desc, i) => (
+              <button key={i} className="btn list-item" onClick={() => respond({ choice: i })}>
+                Option {i + 1} <span className="dim">(desc {desc})</span>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      );
+    }
+
+    // desc = card.code * 16 + local effect offset (ygopro's aux.Stringid
+    // encoding) -- lets a card whose script only offers a subset of its
+    // named effects this turn (e.g. no legal Spell/Trap to destroy) be
+    // matched to the *correct* label instead of just guessed by position,
+    // and lets the effect(s) it didn't offer still be shown, disabled, so
+    // the player can see the card had another option that wasn't available
+    // right now rather than it silently not existing.
+    const byOffset = new Map<number, number>(); // offset -> index into rawOptions
+    rawOptions.forEach((desc, choiceIdx) => {
+      const offset = card ? desc - card.code * 16 : NaN;
+      if (Object.prototype.hasOwnProperty.call(labels, offset)) byOffset.set(offset, choiceIdx);
+    });
+    // Safety net: never drop a real, clickable option even if the desc
+    // encoding above doesn't line up the way expected -- every entry the
+    // engine actually offered still gets a button somewhere.
+    const usedChoiceIdxs = new Set(byOffset.values());
+    const extra = rawOptions
+      .map((desc, i) => ({ desc, i }))
+      .filter(({ i }) => !usedChoiceIdxs.has(i));
+    const offsets = Object.keys(labels).map(Number).sort((a, b) => a - b);
+
     return (
-      <Modal title="Select an option">
+      <Modal title={card ? `${card.name}: select an effect` : "Select an option"}>
         <div className="modal-list">
-          {options.map((desc, i) => (
-            <button key={i} className="btn list-item" onClick={() => respond({ choice: i })}>
+          {offsets.map((offset) => {
+            const choiceIdx = byOffset.get(offset);
+            const available = choiceIdx !== undefined;
+            return (
+              <button
+                key={offset}
+                className="btn list-item"
+                disabled={!available}
+                onClick={available ? () => respond({ choice: choiceIdx }) : undefined}
+              >
+                {labels[offset]}
+                {!available && <span className="dim"> (not available right now)</span>}
+              </button>
+            );
+          })}
+          {extra.map(({ desc, i }) => (
+            <button key={`extra-${i}`} className="btn list-item" onClick={() => respond({ choice: i })}>
               Option {i + 1} <span className="dim">(desc {desc})</span>
             </button>
           ))}
