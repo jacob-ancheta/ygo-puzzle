@@ -41,3 +41,31 @@ export function yesNoText(cardCode: number | undefined, desc: number | undefined
   if (cardCode === undefined || desc === undefined) return null;
   return YESNO_TEXT[`${cardCode}:${desc}`] ?? null;
 }
+
+// Curated text for MSG_SELECT_OPTION ("activate 1 of these effects") prompts.
+// Like YESNO_TEXT above, the engine only hands the client opaque numeric
+// desc ids for these -- and for this prompt it doesn't even forward which
+// card is asking (see duel_engine.py's MSG_SELECT_OPTION handler), so the
+// caller has to fall back to the currently-resolving chain card.
+//
+// Keyed by the script's own aux.Stringid *local offset* (desc = card.code*16
+// + offset), not by array position: a card's script only calls
+// Duel.SelectOption with the subset of effects that are currently legal
+// (see e.g. c40044918.lua's sel==1/2/3 branches), so the offered options'
+// positions shift depending on board state. The offset is stable regardless
+// -- it's how PromptOverlay both labels the right effect for a partial offer
+// and knows which of a card's *other* named effects to show, disabled, when
+// this turn didn't offer them.
+const OPTION_TEXT: Record<number, Record<number, string>> = {
+  // Elemental HERO Stratos -- offset 0 is the shared "activate 1 of these
+  // effects" trigger description (not one of the two choices below).
+  40044918: {
+    1: "Destroy Spells/Traps on the field, up to the number of \"HERO\" monsters you control, except this card",
+    2: "Add 1 \"HERO\" monster from your Deck to your hand",
+  },
+};
+
+export function optionText(cardCode: number | undefined): Record<number, string> | null {
+  if (cardCode === undefined) return null;
+  return OPTION_TEXT[cardCode] ?? null;
+}
