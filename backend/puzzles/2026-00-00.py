@@ -10,6 +10,9 @@ TEST PUZZLE -- minimal setup for manual testing. Delete/revert this file
 """
 
 PUZZLE = {
+    # Optional display title, shown in the app header next to the app name.
+    "title": "Skill Drain Sandbox",
+
     "lp": {"player": 8000, "opponent": 100},
 
     "opponent_field": [],

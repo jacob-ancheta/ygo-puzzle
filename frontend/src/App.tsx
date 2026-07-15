@@ -651,7 +651,10 @@ export default function App() {
       </div>
 
       <header className="app-header">
-        <h1>Duel Puzzdle</h1>
+        <div className="header-brand">
+          <h1>Duel Puzzdle</h1>
+          {board.puzzleTitle && <span className="puzzle-title">{board.puzzleTitle}</span>}
+        </div>
         <div className="connection-status">
           <span className={`dot ${connected ? "connected" : "disconnected"}`} />
           {connected ? "Connected" : "Disconnected"}

@@ -48,6 +48,27 @@
   color: var(--ink-50);
 }
 
+/* Per-puzzle title (the puzzle file's optional "title"), sitting right after
+   the app name in the header -- accent-colored so it reads as "today's
+   puzzle" rather than part of the app branding, with a subtle divider. */
+.header-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.puzzle-title {
+  font-size: 15px;
+  color: var(--accent);
+  padding-left: 12px;
+  border-left: 1px solid var(--ink-600);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30vw;
+}
+
 .connection-status {
   display: flex;
   align-items: center;

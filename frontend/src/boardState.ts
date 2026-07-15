@@ -45,6 +45,10 @@ export interface BoardState {
   banished: { 0: ZoneCard[]; 1: ZoneCard[] };
   status: "playing" | "win" | "loss" | "ended";
   statusMessage: string;
+  // Author-provided display title from the puzzle file's optional "title"
+  // key (see puzzle_loaded in server.py). undefined when the puzzle has
+  // none -- the UI just omits it.
+  puzzleTitle?: string;
   // Only meaningful once status === "win" -- the "win" event fires for
   // either side (server.py/duel_engine.py's MSG_WIN carries whichever
   // player actually won), so this disambiguates "you won" from "the
@@ -246,8 +250,14 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
   const event = item.event as string;
 
   switch (event) {
+    case "puzzle_loaded":
+      return { ...board, puzzleTitle: (item.title as string | null | undefined) ?? undefined };
+
     case "board_state": {
       let b = createInitialBoard();
+      // puzzle_loaded arrives immediately *before* this full reset -- carry
+      // the title it just set across, rather than blanking it every attempt.
+      b.puzzleTitle = board.puzzleTitle;
       const lp = item.lp as { player: number; opponent: number };
       b.lp = { 0: lp.player, 1: lp.opponent };
       const opponentField = item.opponent_field as { card: CardRef; zone: number; position: string }[];
