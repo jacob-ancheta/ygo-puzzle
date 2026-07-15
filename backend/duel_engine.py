@@ -54,6 +54,8 @@ def resolve_all(puzzle):
     names += puzzle.get("player_banished", [])
     names += puzzle.get("opponent_graveyard", [])
     names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
+    names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
+    names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]
     resolved, failed = {}, []
     for name in names:
         card = get_card_by_name(name)
@@ -197,7 +199,11 @@ lib.query_field_card.argtypes = [ctypes.c_ssize_t, ctypes.c_uint8, ctypes.c_uint
 LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE, LOCATION_EXTRA = 0x01, 0x02, 0x04, 0x08, 0x40
 LOCATION_REMOVED = 0x20
 LOCATION_GY = 0x10
-POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE = 0x1, 0x4
+POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE, POS_FACEDOWN_DEFENSE = 0x1, 0x4, 0x8
+# Spell/Trap zone cards conventionally carry the combined face bits (both
+# attack+defense variants), matching what ygopro's own Debug.AddCard puzzle
+# scripts pass for szone placements.
+POS_FACEUP, POS_FACEDOWN = 0x5, 0xa
 QUERY_ATTACK, QUERY_DEFENSE, QUERY_OVERLAY_CARD = 0x100, 0x200, 0x10000
 TYPE_LINK = 0x4000000
 DUEL_ATTACK_FIRST_TURN = 0x02  # puzzles are constructed positions, not turn 1 of a real match --
@@ -281,13 +287,15 @@ class DuelEngine:
             # Link Monsters have no DEF and no defense position, by game
             # rule, under any circumstance -- the engine enforces it for
             # everything summoned through real mechanics, so the one hole is
-            # a puzzle author pre-placing one "defense". Fail at load, the
-            # same place a bad card name fails, rather than starting a duel
-            # in an impossible state.
+            # a puzzle author pre-placing one "defense" (or "set", which is
+            # face-down *defense*). Fail at load, the same place a bad card
+            # name fails, rather than starting a duel in an impossible state.
             if entry["position"] != "attack" and card["type"] & TYPE_LINK:
                 raise ValueError(
                     f"puzzle places Link Monster {entry['name']!r} in defense position -- "
                     "Link Monsters cannot be in defense")
+            if entry["position"] == "set":
+                return POS_FACEDOWN_DEFENSE
             return POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
 
         for i, entry in enumerate(puzzle["opponent_field"]):
@@ -318,6 +326,17 @@ class DuelEngine:
         for i, entry in enumerate(puzzle.get("opponent_hand", [])):
             name = entry["name"] if isinstance(entry, dict) else entry
             self._place(self.resolved[name]["code"], 1, LOCATION_HAND, i, POS_FACEUP_ATTACK)
+        # Optional -- Spell/Trap zone cards, either side. position: "set"
+        # (face-down; immediately activatable, since a pre-placed set card
+        # carries no "set this turn" restriction) or "faceup" (a continuous
+        # card already active -- new_card() enables a face-up on-field
+        # card's effects at placement, see ygopro-core's ocgapi.cpp).
+        for i, entry in enumerate(puzzle.get("player_spelltrap", [])):
+            pos = POS_FACEUP if entry["position"] == "faceup" else POS_FACEDOWN
+            self._place(self.resolved[entry["name"]]["code"], 0, LOCATION_SZONE, i, pos)
+        for i, entry in enumerate(puzzle.get("opponent_spelltrap", [])):
+            pos = POS_FACEUP if entry["position"] == "faceup" else POS_FACEDOWN
+            self._place(self.resolved[entry["name"]]["code"], 1, LOCATION_SZONE, i, pos)
 
         lib.start_duel(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(DUEL_ATTACK_FIRST_TURN))
 
@@ -404,6 +423,14 @@ def initial_board_state(engine):
         "opponent_graveyard": [brief(name) for name in puzzle.get("opponent_graveyard", [])],
         "opponent_hand": [brief(e["name"] if isinstance(e, dict) else e)
                           for e in puzzle.get("opponent_hand", [])],
+        "player_spelltrap": [
+            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            for i, entry in enumerate(puzzle.get("player_spelltrap", []))
+        ],
+        "opponent_spelltrap": [
+            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            for i, entry in enumerate(puzzle.get("opponent_spelltrap", []))
+        ],
     }
 
 
@@ -908,11 +935,16 @@ def run(engine):
 
         elif msg == MSG_POS_CHANGE:
             code = stream.u32() & 0x7fffffff
-            stream.u8(); stream.u8(); stream.u8()
+            controller = stream.u8(); location = stream.u8(); sequence = stream.u8()
             prev_pos = stream.u8()
             cur_pos = stream.u8()
             recently_touched.add(code)
+            # location matters: the client used to apply this by card code
+            # alone, which flipped *every* copy of the card on the board
+            # (e.g. all four pre-placed Skill Drains) instead of the one
+            # that actually changed.
             yield {"type": "event", "event": "pos_change", "card": card_brief(code),
+                   "location": {"controller": controller, "location_id": location, "sequence": sequence},
                    "prev_position": prev_pos, "position": cur_pos}
 
         elif msg == MSG_SET:
@@ -1266,26 +1298,33 @@ def run(engine):
             chains = []
             for _ in range(n_chain):
                 code = stream.u32() & 0x7fffffff
-                stream.u8(); stream.u8(); stream.u8()
+                controller = stream.u8(); location = stream.u8(); sequence = stream.u8()
                 desc = stream.u32()
-                chains.append((code, desc))
+                chains.append((code, desc, controller, location, sequence))
             n_attack = stream.u8()
             attackers = []
             for _ in range(n_attack):
                 code = stream.u32() & 0x7fffffff
-                stream.u8(); stream.u8(); stream.u8()
+                controller = stream.u8(); location = stream.u8(); sequence = stream.u8()
                 direct_ok = stream.u8()
-                attackers.append((code, direct_ok))
+                attackers.append((code, direct_ok, controller, location, sequence))
             to_m2 = stream.u8()
             to_ep = stream.u8()
 
+            # Location on every per-card option, same as MSG_SELECT_IDLECMD:
+            # the client matches a clicked board card to its options by exact
+            # zone, so an option without one would render that copy inert.
             options = []
-            for i, (code, desc) in enumerate(chains):
+            for i, (code, desc, controller, location, sequence) in enumerate(chains):
                 options.append({"category": 0, "index": i, "action": "activate",
-                                 "card": card_brief(code), "desc": desc})
-            for i, (code, direct_ok) in enumerate(attackers):
+                                 "card": card_brief(code), "desc": desc,
+                                 "location": {"controller": controller, "location_id": location,
+                                              "sequence": sequence}})
+            for i, (code, direct_ok, controller, location, sequence) in enumerate(attackers):
                 options.append({"category": 1, "index": i, "action": "attack",
-                                 "card": card_brief(code), "can_attack_directly": bool(direct_ok)})
+                                 "card": card_brief(code), "can_attack_directly": bool(direct_ok),
+                                 "location": {"controller": controller, "location_id": location,
+                                              "sequence": sequence}})
             if to_m2:
                 options.append({"category": 2, "index": 0, "action": "main_phase_2"})
             if to_ep:

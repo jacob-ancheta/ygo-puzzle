@@ -51,13 +51,16 @@ function dedupeByCategory(matches: { option: IdleBattleOption; idx: number }[]) 
  * ("Summon Summon Set Set").
  *
  * `loc`, when given, narrows to the clicked card's own entries. Field zones
- * (Monster/Spell-Trap) have a stable identity, so an exact location match
- * correctly keeps 2 identical field cards' options separate. Hand cards
- * don't: the engine shuffles hand order internally while the client's
+ * (Monster/Spell-Trap) have a stable identity, so the location match is
+ * authoritative there: no entry for this exact zone means this copy has no
+ * actions, full stop -- falling back to same-code matches would let one
+ * copy borrow another's actions (e.g. a face-up continuous trap showing,
+ * and worse *sending*, its set twin's Activate). Hand cards can't do the
+ * exact match: the engine shuffles hand order internally while the client's
  * display stays cosmetic (see matchCardIndex's identical caveat), so a hand
  * card's sequence can't be trusted to mean "this physical copy" -- and
  * since identical hand copies are functionally interchangeable anyway, they
- * fall back to deduping by action instead of pinpointing one copy.
+ * dedupe by action instead of pinpointing one copy.
  */
 export function idleBattleOptionsFor(prompt: Record<string, unknown> | null, code: number, loc?: Loc) {
   if (!prompt || (prompt.prompt !== "idlecmd" && prompt.prompt !== "battlecmd")) return [];
@@ -66,11 +69,10 @@ export function idleBattleOptionsFor(prompt: Record<string, unknown> | null, cod
     .map((option, idx) => ({ option, idx }))
     .filter(({ option }) => option.card && option.card.code === code);
   if (!loc || loc.location_id === LOC.HAND) return dedupeByCategory(matches);
-  const exact = matches.filter(({ option }) => option.location
+  return matches.filter(({ option }) => option.location
     && option.location.controller === loc.controller
     && option.location.location_id === loc.location_id
     && option.location.sequence === loc.sequence);
-  return exact.length > 0 ? exact : dedupeByCategory(matches);
 }
 
 export function nonCardOptions(prompt: Record<string, unknown> | null) {
