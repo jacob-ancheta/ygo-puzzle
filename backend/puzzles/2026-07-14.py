@@ -7,6 +7,9 @@ The filename (YYYY-MM-DD.py) is the date this puzzle is served on.
 """
 
 PUZZLE = {
+    # Optional display title, shown in the app header next to the app name.
+    "title": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA - AAAAAAAAAAAAAAAAAAA",
+
     "lp": {"player": 600, "opponent": 7000},
 
     "opponent_field": [

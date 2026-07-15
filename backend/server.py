@@ -243,7 +243,8 @@ async def duel_socket(websocket: WebSocket):
 
     try:
         await websocket.send_json({"type": "event", "event": "puzzle_loaded",
-                                    "date": resolved_date, "win_condition": puzzle["win_condition"]})
+                                    "date": resolved_date, "win_condition": puzzle["win_condition"],
+                                    "title": puzzle.get("title")})
         # Routed through run_blocking like every other engine-adjacent call:
         # it doesn't touch the ctypes pduel handle, but it does call into
         # card_lookup.py (via card_brief()), which now reuses a single
