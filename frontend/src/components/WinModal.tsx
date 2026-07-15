@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTodayLeaderboard } from "../useTodayLeaderboard";
+import type { SignInResult } from "../useAuth";
 import SignInForm, { USERNAME_QUERY_PARAM } from "./SignInForm";
 import LeaderboardList from "./LeaderboardList";
 
@@ -16,7 +17,7 @@ interface Props {
   // CLAIM_TOKEN_SECRET configured. See App.tsx's claim-on-sign-in effect for
   // the other half of this flow.
   claimToken: string | null | undefined;
-  signInWithEmail: (email: string, redirectTo?: string) => Promise<string | null>;
+  signInWithEmail: (email: string, redirectTo: string, redirectToForNewAccount?: string) => Promise<SignInResult>;
   onClose: () => void;
 }
 
@@ -49,11 +50,27 @@ export default function WinModal({ winSummary, communityPosition, claimToken, si
   // they travel with the link itself rather than depending on persisted
   // storage. App.tsx reads them back off window.location on load and posts
   // to /claim-win and /claim-username respectively.
-  function handleSignIn(email: string, username: string) {
-    const params = new URLSearchParams();
-    if (claimToken) params.set(CLAIM_QUERY_PARAM, claimToken);
-    params.set(USERNAME_QUERY_PARAM, username);
-    return signInWithEmail(email, `${window.location.origin}?${params.toString()}`);
+  function handleSignIn(email: string, username: string): Promise<SignInResult> {
+    // The claim token (if any) belongs on *both* redirects -- a returning
+    // player claiming an anonymous win still needs it -- but the username
+    // only ever belongs on the new-account one, so an existing player's
+    // display_name is never touched even if they typed something here. See
+    // useAuth.ts's signInWithEmail for why the first redirect is tried
+    // alone before the second is ever used.
+    const baseParams = new URLSearchParams();
+    if (claimToken) baseParams.set(CLAIM_QUERY_PARAM, claimToken);
+    const buildUrl = (params: URLSearchParams) => {
+      const qs = params.toString();
+      return qs ? `${window.location.origin}?${qs}` : window.location.origin;
+    };
+    const redirectTo = buildUrl(baseParams);
+    let redirectToForNewAccount: string | undefined;
+    if (username) {
+      const newParams = new URLSearchParams(baseParams);
+      newParams.set(USERNAME_QUERY_PARAM, username);
+      redirectToForNewAccount = buildUrl(newParams);
+    }
+    return signInWithEmail(email, redirectTo, redirectToForNewAccount);
   }
 
   // Real (signed-in, tamper-resistant) position takes priority; the rough
