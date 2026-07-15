@@ -210,12 +210,20 @@
    zone-row actually gives its cards (measured ~85px at a 720px-tall
    viewport), with the same 180px ceiling field cards have, so this cell
    tracks the field cards' size across viewport sizes instead of sitting at
-   a fixed mismatched height. */
+   a fixed mismatched height.
+   Width is set explicitly too (108/168 * height), not left for
+   aspect-ratio to derive from height alone -- confirmed live that doesn't
+   reliably happen here (this cell isn't a flex/grid item being stretched to
+   a definite cross-size, the situation aspect-ratio-from-height actually
+   needs): it rendered as a 24x24 square instead of a ~15x24 card, quietly
+   eating several extra px of width in every narrow layout below. */
 .opp-hand-cell {
   height: min(12vh, 180px);
+  width: min(7.71vh, 116px);
 }
 .opp-hand-cell .card-slot {
   max-height: min(12vh, 180px);
+  max-width: min(7.71vh, 116px);
 }
 
 .field-center {
@@ -445,6 +453,23 @@
      would just push the excess back into the same silent overflow this
      whole fix is for. */
   flex-shrink: 1;
+  /* Explicit, not left to default (min-width:auto) -- a flex item's
+     automatic minimum size is spec'd to be *0* once its overflow is
+     anything but visible ("Flexbox §4.5, automatic minimum size"), which
+     .card-tile is (overflow:hidden, for the type-badge/card-stats overlays
+     -- see below). .card-slot.empty has no such floor at all since it never
+     sets overflow, so in a cramped zone-row flexbox's multi-pass shrink
+     resolution clamps the *empty* cells at their (non-zero) floor quickly,
+     then dumps 100% of whatever shrinkage is still needed onto the
+     populated ones, which have none -- confirmed live, a populated card
+     collapsing to a literal 2px-wide sliver next to 53px-wide empty
+     neighbors *in the same row*. An explicit min-width overrides that
+     auto-zero per spec, giving both kinds of cell the same real floor so
+     shrinkage lands proportionally instead of concentrating onto whichever
+     cells happen to have overflow:hidden. Small enough to still shrink
+     substantially in a genuinely tight row, large enough that a card stays
+     recognizably a card rather than a line. */
+  min-width: 16px;
 }
 
 .card-slot.empty {
@@ -1103,6 +1128,30 @@ textarea.text-input {
      (well outside the max-height:500px breakpoint, so this was purely the
      original rule's own bug). */
   .app-main { grid-template-rows: minmax(0, 1fr) minmax(70px, 130px); }
+
+  /* .piles-column sits *above* .field-center once board-main goes column
+     (immediately above), not beside it -- its height now comes directly out
+     of the field's budget instead of just matching whatever the field's own
+     height already was. Left column-direction (its wide-layout shape, two
+     LP strips stacked tall) it measured ~170px at 900x700, squeezing the
+     entire field (6 zone-rows) into the ~156px left over -- confirmed live,
+     that's what was rendering as tiny, near-illegible cards. Row-direction
+     spends the now-abundant width instead: both LP strips side by side in
+     one compact bar. */
+  .piles-column { flex-direction: row; justify-content: center; gap: 16px; }
+  .lp-strip { flex-direction: row; gap: 8px; }
+  /* Was sized off 12vh to track field-card height in the wide layout, where
+     .piles-column's height *is* the field's height -- see the rule's own
+     comment. That relationship doesn't hold here (this cell instead sits in
+     a horizontal bar above a field with its own separate height budget), so
+     12vh -- measured against the *whole window's* height, not this bar's --
+     way overshoots. A small fixed size matching the LP badge it sits next
+     to reads correctly in a horizontal bar instead. */
+  .opp-hand-cell { height: 34px; width: 22px; }
+  .opp-hand-cell .card-slot { max-height: 34px; max-width: 22px; }
+  /* Redundant with the count already shown on the card-cell itself
+     (.pile-cell-count) once space is this tight -- see Board.tsx. */
+  .hand-count { display: none; }
 }
 
 .auth-panel {
@@ -1211,7 +1260,14 @@ textarea.text-input {
      second row track still reserves height even though nothing renders
      into it, wasting space that should go to the board. Confirmed live:
      board-main dropped from 252px to 110px without this reset. */
-  .app-main { grid-template-columns: 1fr 280px; grid-template-rows: 1fr; }
+  /* A fixed 280px card-detail sidebar was tuned for a phone-landscape width
+     (812px+) with plenty to spare -- at a narrower short-landscape window
+     (e.g. 480x320, an older/small phone or a heavily resized browser) it
+     left the board only ~176px, nowhere near enough for even the piles
+     sidebar plus field-center's minimum, confirmed live as overlapping and
+     partly offscreen zone cells. min() scales the sidebar down with the
+     viewport instead of holding it fixed once space gets this tight. */
+  .app-main { grid-template-columns: 1fr min(280px, 32%); grid-template-rows: 1fr; }
   .board-main { flex-direction: row; }
 
   .app-header { padding: 4px 10px; }
@@ -1253,7 +1309,19 @@ textarea.text-input {
   .lp-badge { min-width: 36px; padding: 2px 5px; }
   .lp-label { font-size: 7px; }
   .lp-value { font-size: 12px; }
-  .piles-column { gap: 3px; }
+  /* This block re-asserts board-main's row layout (.piles-column back to
+     being a narrow sidebar *beside* the field, not a bar above it -- see
+     the reset above), so the max-width:900px rule's row-direction/opp-hand
+     sizing (tuned for that bar) has to be reset back here too, or the two
+     LP strips try to lay out side by side inside this now-narrow sidebar
+     and overflow it -- confirmed live at 480x320 (both breakpoints firing
+     together): a 25px overflow silently pushed the opponent's empty pile
+     cells partly offscreen and into each other. */
+  .piles-column { flex-direction: column; gap: 3px; }
+  .lp-strip { flex-direction: column; }
+  .opp-hand-cell { height: 24px; width: 15px; }
+  .opp-hand-cell .card-slot { max-height: 24px; max-width: 15px; }
+  .hand-count { display: block; }
 
   /* .field-center is `width: fit-content` + flex-shrink:0 (App.css:172) --
      its natural content width (driven by .card-slot's height-derived
