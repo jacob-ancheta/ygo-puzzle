@@ -10,7 +10,19 @@ import PileViewOverlay from "./PileViewOverlay";
 import PlacementOverlay from "./PlacementOverlay";
 import SelectionOverlay from "./SelectionOverlay";
 
-export interface PileView { label: string; cards: ZoneCard[] }
+export interface PileView {
+  label: string;
+  cards: ZoneCard[];
+  // Opponent-owned piles (their hand, GY, ...) are strictly view-only: the
+  // pile viewer matches offered actions by card *code*, so without this, an
+  // opponent card sharing a code with one of the player's actionable cards
+  // (e.g. the same card name in both hands) would wrongly pick up the
+  // player's own Summon/Set/Activate entries and let them act on it.
+  // Anything genuinely interactable in an opponent zone (an effect
+  // targeting their GY, ...) comes through selection prompts, not these
+  // idle actions, and those still work regardless.
+  readOnly?: boolean;
+}
 
 // A Summon/Set action whose target zone is still a client-side guess (see
 // boardState.ts's guessOpenZones) -- nothing has been sent to the server
@@ -92,6 +104,14 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   // feedback (menus, confirm modals) for their own actions.
   const [enlargedKey, setEnlargedKey] = useState<string | null>(null);
   const [enlargedChainLink, setEnlargedChainLink] = useState<number | null>(null);
+  // An opponent *hand* activation (a hand trap like Maxx "C") has no board
+  // slot for enlargedKey to match -- capture the activating card itself so
+  // the hand cell in the lp-strip can display it face-up with the same
+  // pulse + chain-link badge for the glow window. Snapshotted here rather
+  // than read live from board.currentChainCard at render time, since the
+  // chain can fully resolve (clearing currentChainCard) before the 2s glow
+  // is done.
+  const [enlargedHandCard, setEnlargedHandCard] = useState<CardRef | null>(null);
   const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const loc = board.currentChainLocation;
@@ -105,9 +125,11 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     const key = zoneKey(loc.controller, loc.location_id, loc.sequence);
     setEnlargedKey(key);
     setEnlargedChainLink(board.currentChainLink ?? null);
+    setEnlargedHandCard(loc.location_id === LOC.HAND ? board.currentChainCard ?? null : null);
     glowTimerRef.current = setTimeout(() => {
       setEnlargedKey(null);
       setEnlargedChainLink(null);
+      setEnlargedHandCard(null);
       glowTimerRef.current = null;
     }, 2000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -230,7 +252,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           count={count}
           hidden
           clickable={Boolean(cards && cards.length > 0)}
-          onOpen={cards ? () => setPileView({ label: openLabel, cards }) : undefined}
+          onOpen={cards ? () => setPileView({ label: openLabel, cards, readOnly: controller === 1 }) : undefined}
         />
       );
     }
@@ -244,7 +266,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         count={list.length}
         topCard={list[list.length - 1]}
         clickable={list.length > 0}
-        onOpen={list.length > 0 ? () => setPileView({ label: openLabel, cards: list }) : undefined}
+        onOpen={list.length > 0 ? () => setPileView({ label: openLabel, cards: list, readOnly: controller === 1 }) : undefined}
         onCardDetail={onCardDetail}
       />
     );
@@ -271,9 +293,36 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       <div className="board-main">
         <div className="piles-column">
           <div className="lp-strip">
-            <div className="lp-badge">
-              <span className="lp-label">Opponent</span>
-              <span className="lp-value">{board.lp[1]}</span>
+            <div className="lp-strip-row">
+              <div className="lp-badge">
+                <span className="lp-label">Opponent</span>
+                <span className="lp-value">{board.lp[1]}</span>
+              </div>
+              {/* Their hand is public info -- this is a solved-position
+                  puzzle, not a ladder game -- but rendering a card back
+                  (not fanned-out faces) keeps the always-on board clean;
+                  the full hand is one click away in the pile viewer. While
+                  the opponent is activating a card *from* that hand (a hand
+                  trap), the activating card takes over this cell face-up
+                  with the same pulse + chain-link badge a board activation
+                  gets. */}
+              <div className="opp-hand-cell">
+                {enlargedHandCard ? (
+                  <CardTile
+                    card={enlargedHandCard}
+                    enlarged
+                    chainLinkBadge={enlargedChainLink ?? undefined}
+                  />
+                ) : (
+                  <PileCell
+                    label="HAND"
+                    count={board.hand[1].length}
+                    hidden
+                    clickable={board.hand[1].length > 0}
+                    onOpen={() => setPileView({ label: "Opponent's Hand", cards: board.hand[1], readOnly: true })}
+                  />
+                )}
+              </div>
             </div>
             <span className="hand-count">Hand: {board.hand[1].length}</span>
           </div>
@@ -359,7 +408,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           <PileViewOverlay
             label={pileView.label}
             cards={pileView.cards}
-            prompt={prompt}
+            prompt={pileView.readOnly ? null : prompt}
             onCardDetail={onCardDetail}
             onCardMenu={onCardMenu}
             onClose={() => setPileView(null)}

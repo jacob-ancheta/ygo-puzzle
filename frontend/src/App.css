@@ -176,6 +176,27 @@
   color: var(--ink-300);
 }
 
+.lp-strip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* .card-slot sizes itself as height:100% + aspect-ratio, which works inside
+   a stretched .zone-row but resolves to nothing useful here in the
+   piles-column -- give the opponent-hand cell an explicit height for the
+   slot to derive its width from instead. 12vh approximates what a field
+   zone-row actually gives its cards (measured ~85px at a 720px-tall
+   viewport), with the same 180px ceiling field cards have, so this cell
+   tracks the field cards' size across viewport sizes instead of sitting at
+   a fixed mismatched height. */
+.opp-hand-cell {
+  height: min(12vh, 180px);
+}
+.opp-hand-cell .card-slot {
+  max-height: min(12vh, 180px);
+}
+
 .field-center {
   display: flex;
   flex-direction: column;
