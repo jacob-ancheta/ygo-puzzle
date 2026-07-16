@@ -14,6 +14,21 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+try:
+    # Opt-in, local-machine-only escape hatch for previewing an unreleased
+    # (future-dated) puzzle file before pushing it -- see
+    # local_config.example.py. Deliberately sourced from local_config.py
+    # (gitignored, per-machine, same file duel_engine.py already uses for
+    # engine paths) rather than a plain env var: this can never accidentally
+    # end up set on Render, since that file simply doesn't exist there.
+    # Only lifts the clamp below (i.e. lets you connect to and PLAY a future
+    # puzzle locally) -- server.py's own is_current_puzzle check is separate
+    # and still keys strictly off today_str(), so a local win against a
+    # previewed future puzzle still never records to the real leaderboard.
+    from local_config import ALLOW_FUTURE_PUZZLES
+except ImportError:
+    ALLOW_FUTURE_PUZZLES = False
+
 PUZZLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "puzzles")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.py$")
 ROTATION_TZ = ZoneInfo("America/New_York")
@@ -44,6 +59,8 @@ def available_dates():
 def public_dates():
     """available_dates() minus anything dated after today (Eastern) -- the
     only date list that's safe to send to a client."""
+    if ALLOW_FUTURE_PUZZLES:
+        return available_dates()
     today = today_str()
     return [d for d in available_dates() if d <= today]
 
@@ -89,8 +106,9 @@ def resolve_puzzle_for(date_str=None):
     # Never serve past "today", whatever the client asked for -- puzzles are
     # authored ahead of time, so without this clamp `?date=9999-12-31` (or
     # just tomorrow's date, which /puzzles used to happily advertise) would
-    # hand out an unreleased puzzle early.
-    if target > today:
+    # hand out an unreleased puzzle early. Lifted only by the local-only
+    # ALLOW_FUTURE_PUZZLES override above.
+    if target > today and not ALLOW_FUTURE_PUZZLES:
         target = today
     candidates = [d for d in dates if d <= target]
     # The bare dates[0] fallback only triggers when NOTHING on disk is dated

@@ -13,15 +13,18 @@ import SelectionOverlay from "./SelectionOverlay";
 export interface PileView {
   label: string;
   cards: ZoneCard[];
-  // Opponent-owned piles (their hand, GY, ...) are strictly view-only: the
-  // pile viewer matches offered actions by card *code*, so without this, an
-  // opponent card sharing a code with one of the player's actionable cards
-  // (e.g. the same card name in both hands) would wrongly pick up the
-  // player's own Summon/Set/Activate entries and let them act on it.
-  // Anything genuinely interactable in an opponent zone (an effect
-  // targeting their GY, ...) comes through selection prompts, not these
-  // idle actions, and those still work regardless.
-  readOnly?: boolean;
+  // Only the player's own Extra Deck needs this: unlike every other pile
+  // (Deck, GY, Banished, Materials, opponent's hand -- none of which are
+  // ever directly actionable), an Extra Deck monster genuinely can offer a
+  // real Special Summon option, and the player picks *which* card by
+  // clicking it here. Building the real {controller, location_id, sequence}
+  // per card is what lets idleBattleOptionsFor match it exactly -- omitting
+  // this (as every other pile does) is what keeps those piles inert instead
+  // of falling back to matching by card code alone, which previously let a
+  // deck card sharing a name with a hand card surface the HAND copy's
+  // Summon option (reproduced live: "summoning" a monster while browsing
+  // the Deck pile).
+  locFor?: (index: number) => Loc;
 }
 
 // A Summon/Set action whose target zone is still a client-side guess (see
@@ -245,6 +248,12 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       const count = typeof pile === "number" ? pile : pile.length;
       const cards = typeof pile === "number" ? undefined : pile;
       const openLabel = kind === "deck" ? "Deck" : "Extra Deck";
+      // Only the player's OWN Extra Deck ever offers a real Special Summon
+      // option -- never the plain Deck (you never hand-pick a card to act
+      // on directly from there), and never the opponent's Extra Deck.
+      const locFor = kind === "extra" && controller === 0
+        ? (i: number) => ({ controller: 0, location_id: LOC.EXTRA, sequence: i })
+        : undefined;
       return (
         <PileCell
           key={`${kind}-${controller}`}
@@ -252,13 +261,22 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           count={count}
           hidden
           clickable={Boolean(cards && cards.length > 0)}
-          onOpen={cards ? () => setPileView({ label: openLabel, cards, readOnly: controller === 1 }) : undefined}
+          onOpen={cards ? () => setPileView({ label: openLabel, cards, locFor }) : undefined}
         />
       );
     }
 
     const list = kind === "gy" ? board.gy[controller] : board.banished[controller];
     const openLabel = kind === "gy" ? "Graveyard" : "Banished Cards";
+    // The player's own GY can hold a genuinely GY-activatable card (e.g. a
+    // monster/trap with "you can activate this effect while it's in your
+    // GY") -- same reasoning as the Extra Deck above. Banished stays
+    // browse-only: nothing in this app's card pool activates from there,
+    // and real targeting of a banished card (an effect that reborns one)
+    // goes through SelectionOverlay, not this viewer.
+    const locFor = kind === "gy" && controller === 0
+      ? (i: number) => ({ controller: 0, location_id: LOC.GY, sequence: i })
+      : undefined;
     return (
       <PileCell
         key={`${kind}-${controller}`}
@@ -266,7 +284,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         count={list.length}
         topCard={list[list.length - 1]}
         clickable={list.length > 0}
-        onOpen={list.length > 0 ? () => setPileView({ label: openLabel, cards: list, readOnly: controller === 1 }) : undefined}
+        onOpen={list.length > 0 ? () => setPileView({ label: openLabel, cards: list, locFor }) : undefined}
         onCardDetail={onCardDetail}
       />
     );
@@ -319,7 +337,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
                     count={board.hand[1].length}
                     hidden
                     clickable={board.hand[1].length > 0}
-                    onOpen={() => setPileView({ label: "Opponent's Hand", cards: board.hand[1], readOnly: true })}
+                    onOpen={() => setPileView({ label: "Opponent's Hand", cards: board.hand[1] })}
                   />
                 )}
               </div>
@@ -408,7 +426,8 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           <PileViewOverlay
             label={pileView.label}
             cards={pileView.cards}
-            prompt={pileView.readOnly ? null : prompt}
+            prompt={prompt}
+            locFor={pileView.locFor}
             onCardDetail={onCardDetail}
             onCardMenu={onCardMenu}
             onClose={() => setPileView(null)}
@@ -485,9 +504,14 @@ function ZoneCardSlot({
   const selectable = selectIdx !== null && !isRequiredSumMaterial;
 
   const isFaceDown = Boolean(card.position && (card.position & POS.FACEDOWN_ATTACK || card.position & POS.FACEDOWN_DEFENSE));
+  // Hidden from detail view only when it's the OPPONENT's face-down card --
+  // the player's own set cards are never actually hidden information *to
+  // the player*: they set it, they know what it is. Only suppress the
+  // detail panel for a genuinely unknown (opponent) face-down card.
+  const isHiddenFromPlayer = isFaceDown && loc.controller === 1;
 
   const handleClick = (e: MouseEvent) => {
-    if (!isFaceDown) onCardDetail(card);
+    if (!isHiddenFromPlayer) onCardDetail(card);
     if (actionable) {
       onCardMenu(card, idleBattleOptions, e.clientX, e.clientY, card.materials);
     } else if (selectable) {

@@ -52,6 +52,7 @@ def resolve_all(puzzle):
     names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
     names += [e["name"] for e in puzzle.get("player_field", [])]
     names += puzzle.get("player_banished", [])
+    names += puzzle.get("player_graveyard", [])
     names += puzzle.get("opponent_graveyard", [])
     names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
     names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
@@ -320,6 +321,11 @@ class DuelEngine:
         # Summon it" have something to reborn from a puzzle's very start.
         for i, name in enumerate(puzzle.get("opponent_graveyard", [])):
             self._place(self.resolved[name]["code"], 1, LOCATION_GY, i, POS_FACEUP_ATTACK)
+        # Symmetric with opponent_graveyard -- seeds the PLAYER's own
+        # graveyard, for puzzles that need a monster already there at the
+        # start (e.g. an Honest/Herald-style reborn or GY-cost effect).
+        for i, name in enumerate(puzzle.get("player_graveyard", [])):
+            self._place(self.resolved[name]["code"], 0, LOCATION_GY, i, POS_FACEUP_ATTACK)
         # Optional -- hand traps and other from-hand effects. Entries are
         # either a bare name or, like opponent_field, a dict with a "name"
         # and an optional "eff_behaviour" policy (see opponent_ai.py).
@@ -420,6 +426,7 @@ def initial_board_state(engine):
             for i, entry in enumerate(puzzle.get("player_field", []))
         ],
         "player_banished": [brief(name) for name in puzzle.get("player_banished", [])],
+        "player_graveyard": [brief(name) for name in puzzle.get("player_graveyard", [])],
         "opponent_graveyard": [brief(name) for name in puzzle.get("opponent_graveyard", [])],
         "opponent_hand": [brief(e["name"] if isinstance(e, dict) else e)
                           for e in puzzle.get("opponent_hand", [])],
