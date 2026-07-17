@@ -522,7 +522,21 @@ export default function App() {
     // single-click instantly flipping it (with no un-do -- position changes
     // are once per turn) made merely inspecting the card destructive. It
     // always goes through the menu (with a Cancel) instead.
-    if (options.length === 1 && !hasMaterials && options[0].option.action !== "Change Position") {
+    //
+    // Set Spell/Trap is excluded for the same "always show the menu"
+    // reason, but a different underlying cause: whenever a Spell/Trap's
+    // Activate condition isn't currently met (e.g. Pot of Avarice needs 5
+    // GY monsters), the engine offers Set as the only option, and this
+    // single-option shortcut skipped straight into zone-glow placement
+    // with no menu at all -- clicking the card jumped straight to "pick a
+    // zone", never showing the "Set" button a player expects to see and
+    // click first (reproduced live: Pot of Avarice's own click flow looked
+    // completely different from every other Spell/Trap in hand, for a
+    // purely incidental reason -- its Activate wasn't legal yet, not
+    // because Set/Activate menus don't apply to it).
+    const alwaysShowsMenu = options[0].option.action === "Change Position"
+      || options[0].option.action === "Set Spell/Trap";
+    if (options.length === 1 && !hasMaterials && !alwaysShowsMenu) {
       dispatchIdleChoice(card, options[0].option, options[0].idx);
       return;
     }
