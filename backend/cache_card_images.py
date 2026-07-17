@@ -48,8 +48,8 @@ def puzzle_card_names(puzzle):
     # puzzle can seed a card into needs that card's art cached (this lagged
     # behind once before: player_field cards silently rendered with no
     # image because this list predated the newer optional keys).
-    names = [e["name"] for e in puzzle["opponent_field"]]
-    names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
+    names = [e["name"] for e in puzzle.get("opponent_field", [])]
+    names += puzzle.get("player_hand", []) + puzzle.get("player_deck", []) + puzzle.get("player_extra", [])
     names += [e["name"] for e in puzzle.get("player_field", [])]
     names += puzzle.get("player_banished", [])
     names += puzzle.get("player_graveyard", [])

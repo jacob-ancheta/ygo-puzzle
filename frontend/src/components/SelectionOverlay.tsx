@@ -1,6 +1,6 @@
 import type { CardRef } from "../protocol";
 import { LOC } from "../boardState";
-import type { HiddenZoneGroup } from "../interaction";
+import { isSumOptionSelectable, type HiddenZoneGroup } from "../interaction";
 import CardTile from "./CardTile";
 
 const ZONE_LABELS: Record<number, string> = {
@@ -14,6 +14,7 @@ const ZONE_LABELS: Record<number, string> = {
 
 interface Props {
   groups: HiddenZoneGroup[];
+  prompt: Record<string, unknown> | null;
   selection: number[];
   isUnselectPrompt: boolean;
   onToggle: (idx: number) => void;
@@ -21,7 +22,7 @@ interface Props {
   pendingFinalChoice?: number | null;
 }
 
-export default function SelectionOverlay({ groups, selection, isUnselectPrompt, onToggle, onCardDetail, pendingFinalChoice }: Props) {
+export default function SelectionOverlay({ groups, prompt, selection, isUnselectPrompt, onToggle, onCardDetail, pendingFinalChoice }: Props) {
   if (groups.length === 0) return null;
 
   return (
@@ -37,13 +38,18 @@ export default function SelectionOverlay({ groups, selection, isUnselectPrompt, 
               const selected = isUnselectPrompt
                 ? Boolean(item.already_selected) || idx === pendingFinalChoice
                 : selection.includes(idx);
+              // Same reachability filtering as on-field "sum" candidates
+              // (see isSumOptionSelectable) -- a GY/banished-eligible
+              // Synchro/Xyz material is just as capable of overshooting the
+              // target as an on-field one.
+              const selectable = isUnselectPrompt || isSumOptionSelectable(prompt, selection, idx);
               return (
                 <CardTile
                   key={`${item.code}-${idx}`}
                   card={item as CardRef}
-                  selectable
+                  selectable={selectable}
                   selected={selected}
-                  onClick={() => { onCardDetail(item as CardRef); onToggle(idx); }}
+                  onClick={() => { onCardDetail(item as CardRef); if (selectable) onToggle(idx); }}
                 />
               );
             })}

@@ -875,6 +875,8 @@
 
 .selection-bar-actions { display: flex; gap: 8px; }
 
+.selection-bar-error { color: var(--danger, #e05555); font-size: 12px; }
+
 /* ---------- side controls (priority toggle + restart) ---------- */
 
 .side-controls {

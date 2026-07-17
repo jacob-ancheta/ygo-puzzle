@@ -90,7 +90,7 @@ interface ConfirmState {
 
 export default function App() {
   const { session, user, signInWithEmail, signOut } = useAuth();
-  const { board, prompt, connected, error, connect, respond } = useDuelSocket(WS_URL, () => session?.access_token);
+  const { board, prompt, connected, error, connect, respond, retried } = useDuelSocket(WS_URL, () => session?.access_token);
 
   // useDuelSocket's own mount effect connects immediately, before Supabase
   // has necessarily finished hydrating a session from the magic-link
@@ -539,27 +539,19 @@ export default function App() {
       setSelection(selection.filter((i) => i !== idx));
       return;
     }
-    const min = prompt.min as number;
     const max = prompt.max as number;
     if (selection.length < max) {
-      const next = [...selection, idx];
-      // A forced exact-count pick (e.g. Tribute Summon's tribute count, or
-      // a Synchro's tuner/non-tuner material step) has no ambiguity about
-      // "am I done" once the count is hit -- skip the extra SelectionBar
-      // Confirm click and answer immediately instead of making the player
-      // select then separately confirm.
-      if (min === max && next.length === max) {
-        respond({ indices: next });
-        setSelection([]);
-      } else {
-        setSelection(next);
-      }
+      // Always wait for an explicit SelectionBar Confirm click, even at an
+      // exact-count pick (e.g. a Tribute Summon's tribute count, or a
+      // Synchro's material step) -- consistent with every other selection
+      // flow (Extra Deck summons, select_unselect) instead of auto-sending
+      // the instant the count is hit, which let one misclick lock in a
+      // wrong choice with no chance to reconsider before it's sent.
+      setSelection([...selection, idx]);
       return;
     }
-    // Already at the limit with room to swap (min < max, since the
-    // exact-count case above always empties selection before this could be
-    // reached) -- swap in the new pick instead of requiring the old one to
-    // be manually unselected first.
+    // Already at the limit with room to swap -- swap in the new pick
+    // instead of requiring the old one to be manually unselected first.
     setSelection([...selection.slice(1), idx]);
   }
 
@@ -821,6 +813,7 @@ export default function App() {
           max={effectivePrompt.max as number}
           canConfirm={selection.length >= (effectivePrompt.min as number) && selection.length <= (effectivePrompt.max as number)}
           onConfirm={() => respond({ indices: selection })}
+          rejected={retried}
         />
       )}
 
@@ -838,6 +831,7 @@ export default function App() {
           canFinish={Boolean(effectivePrompt.can_finish)}
           finishLabel={pendingFinalChoice !== null ? "Cancel" : "Finish"}
           onFinish={() => { respond({ finish: true }); setPendingFinalChoice(null); }}
+          rejected={retried}
         />
       )}
 

@@ -23,11 +23,11 @@ if os.path.exists(MINGW_BIN):
 # ---------- STEP 1: dry-run resolve every name before touching the engine ----------
 def collect_all_names(puzzle):
     names = []
-    for entry in puzzle["opponent_field"]:
+    for entry in puzzle.get("opponent_field", []):
         names.append(entry["name"])
-    names += puzzle["player_hand"]
-    names += puzzle["player_deck"]
-    names += puzzle["player_extra"]
+    names += puzzle.get("player_hand", [])
+    names += puzzle.get("player_deck", [])
+    names += puzzle.get("player_extra", [])
     return names
 
 def resolve_all(puzzle):
@@ -155,23 +155,23 @@ def place(code, owner, location, zone, position):
 
 # ---------- STEP 3: build the board ----------
 # player 0 = you (the solver), player 1 = opponent
-for i, entry in enumerate(PUZZLE["opponent_field"]):
+for i, entry in enumerate(PUZZLE.get("opponent_field", [])):
     card = resolved[entry["name"]]
     pos = POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
     print(f"opponent zone {i}: {card['name']} ({entry['position']})")
     place(card["code"], 1, LOCATION_MZONE, i, pos)
 
-for i, name in enumerate(PUZZLE["player_hand"]):
+for i, name in enumerate(PUZZLE.get("player_hand", [])):
     card = resolved[name]
     print(f"your hand: {card['name']}")
     place(card["code"], 0, LOCATION_HAND, i, POS_FACEUP_ATTACK)
 
-for i, name in enumerate(PUZZLE["player_deck"]):
+for i, name in enumerate(PUZZLE.get("player_deck", [])):
     card = resolved[name]
     print(f"your deck: {card['name']}")
     place(card["code"], 0, LOCATION_DECK, i, POS_FACEUP_ATTACK)
 
-for i, name in enumerate(PUZZLE["player_extra"]):
+for i, name in enumerate(PUZZLE.get("player_extra", [])):
     card = resolved[name]
     print(f"your extra deck: {card['name']}")
     place(card["code"], 0, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)

@@ -96,11 +96,29 @@ export function selectableList(prompt: Record<string, unknown> | null): Selectab
   return null;
 }
 
-/** Index of the board card (code + zone) within the prompt's selectable list, if any. */
-export function matchCardIndex(prompt: Record<string, unknown> | null, code: number, loc: Loc): number | null {
+/**
+ * Index of the board card (code + zone) within the prompt's selectable list,
+ * if any.
+ *
+ * `duplicateRank` disambiguates multiple hand copies of the same card (e.g.
+ * two "Cloudian - Storm Dragon"): pass how many EARLIER same-code cards
+ * precede this one in the displayed hand (0 for the first copy, 1 for the
+ * second, ...), and this returns the (duplicateRank+1)-th matching prompt
+ * entry instead of always the first. Without this, every rendered copy
+ * resolved to the identical prompt index -- selecting one visually
+ * highlighted *all* copies at once (since they all shared one selectIdx) and
+ * made it impossible to ever select two distinct physical copies for a
+ * "discard 2" style prompt. The two copies are still functionally
+ * interchangeable (discarding "copy A" vs "copy B" of an identical card has
+ * no game-state difference -- see the shuffle note below), so mapping the
+ * Nth displayed duplicate to the Nth server-side duplicate is always a safe,
+ * unambiguous choice, not a guess.
+ */
+export function matchCardIndex(prompt: Record<string, unknown> | null, code: number, loc: Loc, duplicateRank = 0): number | null {
   if (!prompt || prompt.prompt === "place") return null;
   const list = selectableList(prompt);
   if (!list) return null;
+  let skipped = 0;
   const idx = list.findIndex((it) => {
     if (it.code !== code) return false;
     if (it.location) {
@@ -111,7 +129,9 @@ export function matchCardIndex(prompt: Record<string, unknown> | null, code: num
       // Hand cards are not positional targets, so matching their identity is
       // the correct interaction and makes those cards selectable again.
       if (loc.location_id === LOC.HAND && it.location.location_id === LOC.HAND) {
-        return it.location.controller === loc.controller;
+        if (it.location.controller !== loc.controller) return false;
+        if (skipped < duplicateRank) { skipped += 1; return false; }
+        return true;
       }
       return it.location.controller === loc.controller && it.location.location_id === loc.location_id && it.location.sequence === loc.sequence;
     }
@@ -180,4 +200,75 @@ export function hiddenZoneGroups(prompt: Record<string, unknown> | null): Hidden
     group.entries.push({ idx, item });
   });
   return Array.from(groups.values());
+}
+
+// Safety cap on how many "sum" prompt candidates isSumOptionSelectable will
+// run its subset-sum search over -- the search is exponential in the worst
+// case, and this is a UX nicety (disabling doomed picks up front), not a
+// correctness requirement (the server still validates regardless). No real
+// puzzle offers anywhere near this many Synchro/Xyz material candidates at
+// once; this just keeps a pathological future puzzle from freezing the UI
+// instead of degrading to "everything looks selectable."
+const SUM_REACHABILITY_CANDIDATE_LIMIT = 20;
+
+/** Does some subset of `levels` (each usable at most once), of size within
+ * [countMin, countMax], sum to exactly `target`? Plain recursive
+ * include/exclude search -- levels.length is always small in practice (see
+ * the cap above), so this stays fast without memoization. */
+function subsetCanReachExactly(levels: number[], target: number, countMin: number, countMax: number): boolean {
+  if (target === 0 && countMin <= 0) return true;
+  if (target < 0 || countMax <= 0 || levels.length === 0) return false;
+  const [first, ...rest] = levels;
+  if (first <= target && subsetCanReachExactly(rest, target - first, countMin - 1, countMax - 1)) return true;
+  return subsetCanReachExactly(rest, target, countMin, countMax);
+}
+
+/**
+ * Whether the "sum" prompt option at `optionIdx` can still be part of some
+ * valid final material combination, given what's already in `selection`.
+ *
+ * Synchro/Xyz material selection only accepts a combination that sums
+ * *exactly* to the prompt's target (see duel_engine.py's MSG_SELECT_SUM
+ * handling) -- but nothing previously stopped the player from picking
+ * options that make that impossible (e.g. selecting materials that already
+ * exceed the target, or that leave a remainder no other combination of
+ * what's left can complete), only to have the final Confirm rejected after
+ * the fact with no explanation of which pick was the problem. This computes,
+ * live as each pick changes, which remaining options could still lead to a
+ * legal combination -- so an option that can no longer possibly be part of
+ * one is simply not selectable, the same way a puzzle's already-fixed
+ * `must_include` materials aren't a "choice" either.
+ *
+ * Already-selected options are always toggleable (deselecting can only ever
+ * make the remaining problem easier, never impossible).
+ */
+export function isSumOptionSelectable(prompt: Record<string, unknown> | null, selection: number[], optionIdx: number): boolean {
+  if (!prompt || prompt.prompt !== "sum") return true;
+  if (selection.includes(optionIdx)) return true;
+
+  const options = (prompt.options as { level?: number }[]) ?? [];
+  if (options.length > SUM_REACHABILITY_CANDIDATE_LIMIT) return true;
+  const mustInclude = (prompt.must_include as { level?: number }[]) ?? [];
+  const target = prompt.target as number;
+  const min = prompt.min as number;
+  const max = prompt.max as number;
+
+  const mustSum = mustInclude.reduce((s, c) => s + (c.level ?? 0), 0);
+  const selectedSum = selection.reduce((s, i) => s + (options[i]?.level ?? 0), 0);
+  const thisLevel = options[optionIdx]?.level ?? 0;
+
+  const remainingAfterThis = target - mustSum - selectedSum - thisLevel;
+  if (remainingAfterThis < 0) return false;
+
+  const picksAfterThis = selection.length + 1;
+  const maxMoreAfterThis = max - picksAfterThis;
+  if (maxMoreAfterThis < 0) return false;
+  const minMoreAfterThis = Math.max(0, min - picksAfterThis);
+
+  const otherUnselectedLevels = options
+    .map((o, i) => ({ i, level: o.level ?? 0 }))
+    .filter(({ i }) => i !== optionIdx && !selection.includes(i))
+    .map(({ level }) => level);
+
+  return subsetCanReachExactly(otherUnselectedLevels, remainingAfterThis, minMoreAfterThis, maxMoreAfterThis);
 }
