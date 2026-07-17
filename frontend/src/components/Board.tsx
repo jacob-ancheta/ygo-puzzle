@@ -115,6 +115,17 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   // chain can fully resolve (clearing currentChainCard) before the 2s glow
   // is done.
   const [enlargedHandCard, setEnlargedHandCard] = useState<CardRef | null>(null);
+  // Same idea as enlargedHandCard, but for a card chaining from a GY/
+  // Banished pile (e.g. Kuribohrn's own "when an opponent's monster
+  // declares an attack" GY effect) -- PileCell only ever shows one face for
+  // the whole pile (whatever's last in the array), so without this the
+  // activating card never actually appears on top, let alone glows, unless
+  // it already happened to be the most-recently-added card. Cleared the
+  // same way as enlargedHandCard once the glow window ends, at which point
+  // PileCell falls back to its normal last-added-card display -- i.e. it
+  // "returns to its previous spot" for free, just by no longer overriding it.
+  const [enlargedPile, setEnlargedPile] = useState<{ controller: number; locationId: number } | null>(null);
+  const [enlargedPileCard, setEnlargedPileCard] = useState<CardRef | null>(null);
   const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const loc = board.currentChainLocation;
@@ -129,10 +140,15 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     setEnlargedKey(key);
     setEnlargedChainLink(board.currentChainLink ?? null);
     setEnlargedHandCard(loc.location_id === LOC.HAND ? board.currentChainCard ?? null : null);
+    const isPile = loc.location_id === LOC.GY || loc.location_id === LOC.BANISHED;
+    setEnlargedPile(isPile ? { controller: loc.controller, locationId: loc.location_id } : null);
+    setEnlargedPileCard(isPile ? board.currentChainCard ?? null : null);
     glowTimerRef.current = setTimeout(() => {
       setEnlargedKey(null);
       setEnlargedChainLink(null);
       setEnlargedHandCard(null);
+      setEnlargedPile(null);
+      setEnlargedPileCard(null);
       glowTimerRef.current = null;
     }, 2000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,15 +311,19 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     const locFor = kind === "gy" && controller === 0
       ? (i: number) => ({ controller: 0, location_id: LOC.GY, sequence: i })
       : undefined;
+    const locationId = kind === "gy" ? LOC.GY : LOC.BANISHED;
+    const isEnlarged = enlargedPile?.controller === controller && enlargedPile?.locationId === locationId;
     return (
       <PileCell
         key={`${kind}-${controller}`}
         label={label}
         count={list.length}
-        topCard={list[list.length - 1]}
+        topCard={(isEnlarged ? enlargedPileCard : undefined) ?? list[list.length - 1]}
         clickable={list.length > 0}
         onOpen={list.length > 0 ? () => setPileView({ label: openLabel, cards: list, locFor }) : undefined}
         onCardDetail={onCardDetail}
+        enlarged={isEnlarged}
+        chainLinkBadge={isEnlarged ? enlargedChainLink ?? undefined : undefined}
       />
     );
   }
