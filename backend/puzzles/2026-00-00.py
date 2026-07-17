@@ -24,14 +24,29 @@ PUZZLE = {
         },
     ],
 
+    # trigger: "first", not "always" -- unlike Battle Fader (a single copy
+    # that's inherently one-shot), there are two Mirror Forces here sharing
+    # the same code+effect id. "always" would have the AI say yes to *both*
+    # the moment an attack is declared, chaining one Mirror Force onto the
+    # other; "first" uses the same (code, desc) activation tracking to take
+    # only the first one offered and leave the second alone. Whichever of
+    # the two physical copies the engine happens to offer first is
+    # arbitrary, but since they're identical cards with identical effects
+    # it doesn't matter which one actually resolves.
     "opponent_spelltrap": [
         {
             "name": "Mirror Force",
             "position": "set",
+            "eff_behaviour": {
+                "trigger": "first",
+            },
         },
         {
             "name": "Mirror Force",
             "position": "set",
+            "eff_behaviour": {
+                "trigger": "first",
+            },
         },
     ],
 

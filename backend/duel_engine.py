@@ -839,7 +839,7 @@ def run(engine):
             phase = stream.u16()
             yield {"type": "event", "event": "new_phase", "phase": PHASE_NAMES.get(phase, hex(phase))}
             if phase == PHASE_END and current_turn_player == 0:
-                yield {"type": "event", "event": "loss", "message": "turn ended without winning"}
+                yield {"type": "event", "event": "loss", "message": "Your turn ended without winning."}
                 return
 
         elif msg == MSG_HINT:

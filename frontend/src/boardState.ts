@@ -418,20 +418,34 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       return { ...board, currentChainCard: undefined, currentChainLocation: undefined, currentChainLink: undefined };
 
     case "win": {
-      const isPlayerWin = item.winner === 0;
+      // MSG_WIN fires for either side -- ygopro-core sends the identical
+      // message whether the player's own LP hit 0, they decked out trying
+      // to draw (reason 2 -- see field::adjust_step's win-check in
+      // processor.cpp), or they actually won. Previously this always set
+      // status to "win" regardless of who won, so an opponent win landed
+      // in neither the win-modal check (App.tsx's showWinModal requires
+      // playerWon === true) nor the loss-modal one (requires
+      // status === "loss") -- no modal ever appeared for an LP-0 or
+      // deck-out loss (reproduced live: attacking into a bigger monster
+      // dropped the player's LP to 0 with no modal shown at all).
+      if (item.winner !== 0) {
+        const reason = item.reason as number | undefined;
+        const message = reason === 2 ? "You ran out of cards to draw." : "Your Life Points hit 0.";
+        return { ...board, status: "loss", statusMessage: message };
+      }
       const lb = item.leaderboard as { rank: number | null; overall_position: number | null } | null | undefined;
       return {
         ...board,
         status: "win",
-        statusMessage: isPlayerWin ? "You win!" : "Opponent wins.",
-        playerWon: isPlayerWin,
-        winSummary: isPlayerWin ? (lb ?? null) : undefined,
+        statusMessage: "You win!",
+        playerWon: true,
+        winSummary: lb ?? null,
         // Separate from winSummary -- a rough "X people have solved this"
         // count, not tamper-resistant (no dedup for anonymous replays), so
         // it's only ever a fallback for display when there's no real
         // (signed-in) position.
-        communityPosition: isPlayerWin ? ((item.community_position as number | null | undefined) ?? null) : undefined,
-        claimToken: isPlayerWin ? ((item.claim_token as string | null | undefined) ?? null) : undefined,
+        communityPosition: (item.community_position as number | null | undefined) ?? null,
+        claimToken: (item.claim_token as string | null | undefined) ?? null,
       };
     }
 
