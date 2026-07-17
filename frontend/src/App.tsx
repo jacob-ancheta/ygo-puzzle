@@ -715,6 +715,7 @@ export default function App() {
 
       {showLossModal && (
         <LossModal
+          message={board.statusMessage}
           onRestart={() => { setShowLossModal(false); restart(); }}
           onViewBoard={() => setShowLossModal(false)}
         />
