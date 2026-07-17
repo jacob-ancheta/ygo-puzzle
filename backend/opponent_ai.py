@@ -34,18 +34,33 @@ def _resolve_names(names):
     return codes
 
 
+def _resolve_controller(value):
+    """None -> no restriction; "opponent"/"self" -> the concrete player
+    index, relative to the AI's own side (player 1). Raises loudly on
+    anything else, same reasoning as _resolve_names."""
+    if value is None:
+        return None
+    mapping = {"opponent": 0, "self": 1}
+    if value not in mapping:
+        raise ValueError(f"eff_behaviour trigger_controller must be 'opponent' or 'self', got {value!r}")
+    return mapping[value]
+
+
 class OpponentAI:
     def __init__(self, puzzle, resolved):
         # resolved: name -> card info dict (code, ...), already computed by
         # duel_engine.resolve_all() for every card named anywhere in the puzzle.
         self.policies = {}
-        # opponent_hand entries may be bare names (no policy possible) or
-        # the same dict shape as opponent_field -- both zones' cards can
-        # carry an eff_behaviour, and the policy itself is zone-agnostic
-        # (the engine only ever offers effects that are legal from wherever
-        # the card actually is, e.g. a hand trap from hand).
+        # opponent_hand/opponent_graveyard entries may be bare names (no
+        # policy possible) or the same dict shape as opponent_field -- all
+        # four zones' cards can carry an eff_behaviour, and the policy
+        # itself is zone-agnostic (the engine only ever offers effects that
+        # are legal from wherever the card actually is, e.g. a hand trap
+        # from hand, or a GY-triggered effect like Kuribohrn's own "when an
+        # opponent's monster declares an attack" from the graveyard).
         hand_entries = [e for e in puzzle.get("opponent_hand", []) if isinstance(e, dict)]
-        for entry in puzzle.get("opponent_field", []) + hand_entries + puzzle.get("opponent_spelltrap", []):
+        gy_entries = [e for e in puzzle.get("opponent_graveyard", []) if isinstance(e, dict)]
+        for entry in puzzle.get("opponent_field", []) + hand_entries + gy_entries + puzzle.get("opponent_spelltrap", []):
             behaviour = entry.get("eff_behaviour")
             if not behaviour:
                 continue
@@ -53,7 +68,27 @@ class OpponentAI:
             self.policies[code] = {
                 "trigger": behaviour.get("trigger", "always"),
                 "respond_to": _resolve_names(behaviour.get("respond_to")),
+                # Inverse of respond_to -- skip an otherwise-legal activation
+                # opportunity when it was triggered by one of these specific
+                # cards (e.g. Baronne de Fleur's negate should fire on
+                # anything *except* Puppet Plant). respond_to alone can't
+                # express "everything except X" without enumerating every
+                # other card in the puzzle by name.
+                "avoid": _resolve_names(behaviour.get("avoid")),
+                # Restricts which side's activation counts as a trigger --
+                # "opponent" (relative to whichever side this policy's own
+                # card is on, always player 1/the AI here) means player 0,
+                # "self" means player 1. Lets a card worded "if your opponent
+                # activates a card or effect" (e.g. Baronne de Fleur's
+                # negate) actually mean that, instead of also firing on the
+                # AI's own Called by the Grave/Mirror Force/Kuribohrn.
+                "trigger_controller": _resolve_controller(behaviour.get("trigger_controller")),
                 "target": behaviour.get("target"),
+                # Opts an ignition-style ("you may activate this," not tied
+                # to any specific trigger) effect into auto-activation --
+                # see should_activate's require_trigger for why this
+                # defaults to off.
+                "proactive": bool(behaviour.get("proactive")),
             }
 
         # Keyed by (code, desc) rather than just code -- a card like
@@ -75,30 +110,61 @@ class OpponentAI:
 
     # ---- whether-to-activate decisions ----
 
-    def should_activate(self, code, desc, trigger_code=None):
+    def should_activate(self, code, desc, trigger_code=None, trigger_controller=None, require_trigger=False):
         policy = self.policies.get(code)
         if not policy:
+            return False
+        # MSG_SELECT_EFFECTYN's "you may activate this specific effect?"
+        # yes/no has no other candidate to disambiguate against, unlike
+        # MSG_SELECT_CHAIN -- so a card with several distinct effects
+        # sharing one code (e.g. Baronne de Fleur: a proactive "once per
+        # turn: destroy 1 card" ignition effect alongside its reactive
+        # "(Quick Effect): negate an activation") would otherwise have a
+        # blanket eff_behaviour policy apply to *both*, auto-firing the
+        # ignition effect too (reproduced live: it destroyed cards on its
+        # own initiative the instant a policy was added for the negate).
+        # require_trigger (set only by the EFFECTYN call site, never by
+        # MSG_SELECT_CHAIN -- a fresh reactive chain window, e.g. Mirror
+        # Force responding to an attack declaration, legitimately has no
+        # trigger_code yet either) restricts the policy to effects that are
+        # actually responding to something, unless a puzzle explicitly
+        # opts an ignition-style effect in with "proactive": true.
+        if require_trigger and trigger_code is None and not policy.get("proactive"):
             return False
         respond_to = policy["respond_to"]
         if respond_to is not None and trigger_code not in respond_to:
             # Not a matching opportunity at all -- doesn't count against
             # "first" either, so a later matching trigger still gets it.
             return False
+        avoid = policy.get("avoid")
+        if avoid is not None and trigger_code in avoid:
+            # Same reasoning as the respond_to miss above -- this specific
+            # trigger doesn't count as an opportunity at all, so it doesn't
+            # consume "first" and a later, non-avoided trigger still gets it.
+            return False
+        wanted_controller = policy.get("trigger_controller")
+        if wanted_controller is not None and trigger_controller != wanted_controller:
+            # Same "not a matching opportunity at all" reasoning -- e.g.
+            # Baronne de Fleur is worded as responding to the *opponent's*
+            # activations, so the AI's own Called by the Grave/Mirror
+            # Force/Kuribohrn shouldn't count as an opportunity, let alone
+            # get negated.
+            return False
         if policy["trigger"] == "first" and (code, desc) in self.activated:
             return False
         return True
 
-    def choose_chain(self, chains, trigger_code):
+    def choose_chain(self, chains, trigger_code, trigger_controller=None):
         """chains: list of (forced, code, desc). Returns an index to pick,
         or -1 to pass (only meaningful when nothing in the list is forced)."""
         any_forced = any(forced for forced, _, _ in chains)
         if any_forced:
             for i, (forced, code, desc) in enumerate(chains):
-                if forced and self.should_activate(code, desc, trigger_code):
+                if forced and self.should_activate(code, desc, trigger_code, trigger_controller):
                     return i
             return next(i for i, (forced, _, _) in enumerate(chains) if forced)
         for i, (_forced, code, desc) in enumerate(chains):
-            if self.should_activate(code, desc, trigger_code):
+            if self.should_activate(code, desc, trigger_code, trigger_controller):
                 return i
         return -1
 
@@ -115,6 +181,12 @@ class OpponentAI:
         """codes: candidate codes in offered order. Returns chosen indices."""
         policy = self.policies.get(self.active_effect_code)
         target = policy.get("target") if policy else None
+        if target == "all":
+            # "target any number of X" style effects (e.g. Kuribohrn's
+            # "target any number of Kuriboh monsters in your GY") -- take
+            # every offered candidate rather than a random subset.
+            count = min(len(codes), max_sel) if max_sel else len(codes)
+            return list(range(count))
         if target and target != "random":
             wanted = _resolve_names(target)
             matches = [i for i, c in enumerate(codes) if c in wanted]

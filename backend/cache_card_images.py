@@ -49,11 +49,13 @@ def puzzle_card_names(puzzle):
     # behind once before: player_field cards silently rendered with no
     # image because this list predated the newer optional keys).
     names = [e["name"] for e in puzzle.get("opponent_field", [])]
+    names += [m for e in puzzle.get("opponent_field", []) for m in e.get("materials", [])]
     names += puzzle.get("player_hand", []) + puzzle.get("player_deck", []) + puzzle.get("player_extra", [])
     names += [e["name"] for e in puzzle.get("player_field", [])]
+    names += [m for e in puzzle.get("player_field", []) for m in e.get("materials", [])]
     names += puzzle.get("player_banished", [])
     names += puzzle.get("player_graveyard", [])
-    names += puzzle.get("opponent_graveyard", [])
+    names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_graveyard", [])]
     names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
     names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
     names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]

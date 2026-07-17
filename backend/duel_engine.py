@@ -49,11 +49,13 @@ class PuzzleLoadError(Exception):
 
 def resolve_all(puzzle):
     names = [e["name"] for e in puzzle.get("opponent_field", [])]
+    names += [m for e in puzzle.get("opponent_field", []) for m in e.get("materials", [])]
     names += puzzle.get("player_hand", []) + puzzle.get("player_deck", []) + puzzle.get("player_extra", [])
     names += [e["name"] for e in puzzle.get("player_field", [])]
+    names += [m for e in puzzle.get("player_field", []) for m in e.get("materials", [])]
     names += puzzle.get("player_banished", [])
     names += puzzle.get("player_graveyard", [])
-    names += puzzle.get("opponent_graveyard", [])
+    names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_graveyard", [])]
     names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
     names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
     names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]
@@ -133,21 +135,34 @@ _puzzle_setup_scripts = {}
 _setup_script_ids = itertools.count()
 
 
-def build_puzzle_setup_script(puzzle):
+def build_puzzle_setup_script(puzzle, resolved):
     lines = []
-    for i, entry in enumerate(puzzle.get("opponent_field", [])):
-        summon_type = entry.get("summoned")
-        if not summon_type:
-            continue
-        if summon_type not in SUMMON_TYPE_LUA:
-            raise ValueError(
-                f"unknown summoned={summon_type!r} for {entry['name']!r} "
-                f"(expected 'special' or 'normal')"
-            )
-        lines.append(
-            f"do local c = Duel.GetFieldCard(1, LOCATION_MZONE, {i}) "
-            f"if c then Debug.PreSummon(c, {SUMMON_TYPE_LUA[summon_type]}) end end"
-        )
+    for owner, zone_key in ((1, "opponent_field"), (0, "player_field")):
+        for i, entry in enumerate(puzzle.get(zone_key, [])):
+            summon_type = entry.get("summoned")
+            if summon_type:
+                if summon_type not in SUMMON_TYPE_LUA:
+                    raise ValueError(
+                        f"unknown summoned={summon_type!r} for {entry['name']!r} "
+                        f"(expected 'special' or 'normal')"
+                    )
+                lines.append(
+                    f"do local c = Duel.GetFieldCard({owner}, LOCATION_MZONE, {i}) "
+                    f"if c then Debug.PreSummon(c, {SUMMON_TYPE_LUA[summon_type]}) end end"
+                )
+            # Optional -- pre-attaches Xyz materials to this entry (which
+            # must itself be an Xyz Monster) at puzzle start, e.g. a Rank 4
+            # already carrying Level 4 monsters. Debug.AddCard's own zone
+            # logic (libdebug.cpp's debug_add_card) does the actual
+            # attaching for us: targeting a Monster Zone slot that's already
+            # occupied by an Xyz Monster attaches the new card as material
+            # via xyz_add() instead of failing on "zone in use" the way a
+            # normal placement would.
+            for material_name in entry.get("materials", []):
+                code = resolved[material_name]["code"]
+                lines.append(
+                    f"Debug.AddCard({code}, {owner}, {owner}, LOCATION_MZONE, {i}, 0, false)"
+                )
     return "\n".join(lines).encode()
 
 
@@ -347,7 +362,13 @@ class DuelEngine:
         # Optional -- seeds the opponent's graveyard so effects like Futsu no
         # Mitama no Mitsurugi's "target 1 Reptile monster in your GY; Special
         # Summon it" have something to reborn from a puzzle's very start.
-        for i, name in enumerate(puzzle.get("opponent_graveyard", [])):
+        # Entries are either a bare name or, like opponent_field/opponent_hand,
+        # a dict with a "name" and an optional "eff_behaviour" policy (see
+        # opponent_ai.py) -- needed for GY-triggered effects like Kuribohrn's
+        # own "When an opponent's monster declares an attack" effect, which
+        # activates from the GY, not the field or hand.
+        for i, entry in enumerate(puzzle.get("opponent_graveyard", [])):
+            name = entry["name"] if isinstance(entry, dict) else entry
             self._place(self.resolved[name]["code"], 1, LOCATION_GY, i, POS_FACEUP_ATTACK)
         # Symmetric with opponent_graveyard -- seeds the PLAYER's own
         # graveyard, for puzzles that need a monster already there at the
@@ -374,7 +395,7 @@ class DuelEngine:
 
         lib.start_duel(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(DUEL_ATTACK_FIRST_TURN))
 
-        setup_script = build_puzzle_setup_script(puzzle)
+        setup_script = build_puzzle_setup_script(puzzle, self.resolved)
         if setup_script:
             self.setup_script_name = f"__puzzle_setup_{next(_setup_script_ids)}__.lua"
             _puzzle_setup_scripts[self.setup_script_name] = setup_script
@@ -455,7 +476,8 @@ def initial_board_state(engine):
         ],
         "player_banished": [brief(name) for name in puzzle.get("player_banished", [])],
         "player_graveyard": [brief(name) for name in puzzle.get("player_graveyard", [])],
-        "opponent_graveyard": [brief(name) for name in puzzle.get("opponent_graveyard", [])],
+        "opponent_graveyard": [brief(e["name"] if isinstance(e, dict) else e)
+                               for e in puzzle.get("opponent_graveyard", [])],
         "opponent_hand": [brief(e["name"] if isinstance(e, dict) else e)
                           for e in puzzle.get("opponent_hand", [])],
         "player_spelltrap": [
@@ -792,6 +814,24 @@ def run(engine):
     # i.e. "the thing currently being responded to". Drives eff_behaviour's
     # `respond_to` restriction for the opponent AI (see opponent_ai.py).
     last_chaining_code = None
+    # Controller (0/1) of that same card -- drives eff_behaviour's
+    # `trigger_controller` restriction (e.g. Baronne de Fleur's negate should
+    # only fire on the *opponent's* activations, never the AI's own cards).
+    last_chaining_controller = None
+    # Sentinel last_chaining_code can hold besides a real card code -- set
+    # instead of a code at MSG_ATTACK (an attack declaration isn't itself an
+    # "activation", so there's no card code to put here, but it's still a
+    # genuine reactive-trigger opportunity, e.g. Kuribohrn/Mirror Force's
+    # "when an opponent's monster declares an attack" effects). Exists so
+    # should_activate's require_trigger gate (see opponent_ai.py) sees *some*
+    # trigger and doesn't mistake this for an untriggered ignition effect the
+    # way it would if trigger_code stayed None. Note this means an
+    # eff_behaviour's respond_to/avoid (which only ever hold real card
+    # codes) can never match an attack-declaration trigger -- fine for every
+    # current puzzle, but a puzzle that needs to key an attack-triggered
+    # effect's respond_to/avoid off a specific card would need a real code
+    # here instead.
+    ATTACK_DECLARED = "attack_declared"
     # Card code for each chain link, keyed by link number (1-indexed,
     # matching MSG_CHAINING's chain_size / MSG_CHAIN_SOLVING's link number).
     # Built up as links get added to the chain -- which can span several
@@ -890,10 +930,12 @@ def run(engine):
         elif msg == MSG_CHAINING:
             code = stream.u32() & 0x7fffffff
             location = describe_location(stream.u32())
-            stream.u8(); stream.u8(); stream.u8()
+            controller = stream.u8()
+            stream.u8(); stream.u8()
             desc = stream.u32()
             chain_size = stream.u8()
             last_chaining_code = code
+            last_chaining_controller = controller
             chain_link_cards[chain_size] = code
             yield {"type": "event", "event": "chaining", "card": card_brief(code),
                    "chain_link": chain_size, "desc": desc, "location": location}
@@ -916,6 +958,7 @@ def run(engine):
             # that just ended.  Leaving this value around made those prompts
             # look as if the previous effect card were requesting them.
             last_chaining_code = None
+            last_chaining_controller = None
             chain_link_cards.clear()
             yield {"type": "event", "event": "chain_end"}
             yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
@@ -1049,6 +1092,9 @@ def run(engine):
         elif msg == MSG_ATTACK:
             attacker = stream.u32()
             target = stream.u32()
+            if last_chaining_code is None:
+                last_chaining_code = ATTACK_DECLARED
+                last_chaining_controller = attacker & 0xff
             yield {"type": "event", "event": "attack", "attacker": describe_location(attacker),
                    "target": describe_location(target) if target else None}
 
@@ -1067,10 +1113,15 @@ def run(engine):
                        "defender_destroyed": bool(d_destroyed)}
 
         elif msg == MSG_ATTACK_DISABLED:
+            if last_chaining_code == ATTACK_DECLARED:
+                last_chaining_code = None
+                last_chaining_controller = None
             yield {"type": "event", "event": "attack_disabled"}
 
         elif msg == MSG_DAMAGE_STEP_START:
-            pass
+            if last_chaining_code == ATTACK_DECLARED:
+                last_chaining_code = None
+                last_chaining_controller = None
 
         elif msg == MSG_DAMAGE_STEP_END:
             pass
@@ -1198,7 +1249,16 @@ def run(engine):
             desc = stream.u32()
             if player == 1:
                 masked_code = code & 0x7fffffff
-                activate = engine.opponent_ai.should_activate(masked_code, desc, last_chaining_code)
+                # require_trigger=True -- see should_activate's own comment.
+                # A single card/single effect yes-or-no like this one, asked
+                # with no other candidate to disambiguate against, is the
+                # one spot a proactive ignition effect (not tied to any
+                # trigger) and a reactive one (genuinely responding to
+                # something) are otherwise indistinguishable by an
+                # eff_behaviour policy scoped only to the card's code.
+                activate = engine.opponent_ai.should_activate(
+                    masked_code, desc, last_chaining_code, last_chaining_controller,
+                    require_trigger=True)
                 if activate:
                     engine.opponent_ai.note_activated(masked_code, desc)
                 engine.send_i(1 if activate else 0)
@@ -1464,7 +1524,7 @@ def run(engine):
                 # opponent decision -- consult the puzzle's per-card
                 # eff_behaviour policy (see opponent_ai.py); a forced chain
                 # must pick one regardless of policy.
-                choice = engine.opponent_ai.choose_chain(chains, last_chaining_code)
+                choice = engine.opponent_ai.choose_chain(chains, last_chaining_code, last_chaining_controller)
                 if choice != -1:
                     engine.opponent_ai.note_activated(chains[choice][1], chains[choice][2])
                 engine.send_i(choice)
