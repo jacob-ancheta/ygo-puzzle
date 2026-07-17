@@ -45,7 +45,7 @@ class OpponentAI:
         # (the engine only ever offers effects that are legal from wherever
         # the card actually is, e.g. a hand trap from hand).
         hand_entries = [e for e in puzzle.get("opponent_hand", []) if isinstance(e, dict)]
-        for entry in puzzle["opponent_field"] + hand_entries + puzzle.get("opponent_spelltrap", []):
+        for entry in puzzle.get("opponent_field", []) + hand_entries + puzzle.get("opponent_spelltrap", []):
             behaviour = entry.get("eff_behaviour")
             if not behaviour:
                 continue
@@ -149,8 +149,11 @@ class OpponentAI:
         return random.randrange(total_items) if total_items else None
 
     def choose_sum(self, must_n, opt_count, min_sel, max_sel):
-        lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
-        return self.choose_indices(opt_count, lo, hi)
+        # min_sel/max_sel already have ygopro-core's own must-select offset
+        # baked in -- see duel_engine.py's MSG_SELECT_SUM handling for the
+        # full explanation. Using them as-is (no further -must_n
+        # subtraction) matches that fix.
+        return self.choose_indices(opt_count, min_sel, max_sel)
 
     def choose_counter(self, item_maxes, total):
         alloc = [0] * len(item_maxes)

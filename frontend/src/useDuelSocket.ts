@@ -26,6 +26,17 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
   const [prompt, setPrompt] = useState<Record<string, unknown> | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<DuelError | null>(null);
+  // True from the moment a "retry" event arrives (the engine rejected the
+  // previous response as illegal -- see duel_engine.py's `interact()`) until
+  // the player submits a fresh response. Without this, a rejected selection
+  // (e.g. Synchro/Xyz materials that don't actually sum to the target) was
+  // completely invisible: the re-issued prompt looks identical to the one
+  // just submitted, and App.tsx's own useEffect clears `selection` back to
+  // empty on every new prompt object regardless of why it arrived -- so
+  // clicking Confirm on an illegal combination looked exactly like the
+  // button doing nothing at all (reproduced live: repeatedly re-picking
+  // Synchro materials for Gungnir with no error ever shown).
+  const [retried, setRetried] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   // Bumped on every connect() so stale sockets (e.g. the first half of a
   // React StrictMode double-mount, whose close() is async) can tell their
@@ -59,6 +70,7 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
     setBoard(createInitialBoard());
     setPrompt(null);
     setError(null);
+    setRetried(false);
 
     const generation = ++generationRef.current;
     retryCountRef.current = 0;
@@ -92,6 +104,12 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
       if (generationRef.current !== generation) return;
       const item = JSON.parse(raw.data as string);
 
+      // TEMP DEBUG -- remove once the Trishula sum-prompt rejection is
+      // diagnosed.
+      if (item.type === "prompt" && item.prompt === "sum") {
+        console.log("[sum prompt]", JSON.parse(JSON.stringify(item)));
+      }
+
       if (item.type === "error") {
         setError({ message: item.message, suggestions: item.suggestions });
         setPrompt(null);
@@ -100,6 +118,7 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
 
       if (item.type === "event") {
         if (TERMINAL_EVENTS.has(item.event)) terminalRef.current = true;
+        if (item.event === "retry") setRetried(true);
         setBoard((prev) => applyEvent(prev, item));
         setPrompt(null);
       } else if (item.type === "prompt") {
@@ -144,9 +163,15 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
   const respond = useCallback((response: Record<string, unknown>) => {
     if (respondedForRef.current === prompt) return;
     respondedForRef.current = prompt;
+    setRetried(false);
+    // TEMP DEBUG -- remove alongside the "[sum prompt]" log above.
+    if (prompt?.prompt === "sum") {
+      console.log("[sum response]", response, "for options",
+        (prompt.options as { name?: string }[])?.map((o) => o.name));
+    }
     wsRef.current?.send(JSON.stringify(response));
     setPrompt(null);
   }, [prompt]);
 
-  return { board, prompt, connected, error, connect, respond };
+  return { board, prompt, connected, error, connect, respond, retried };
 }

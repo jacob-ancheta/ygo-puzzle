@@ -348,6 +348,16 @@ async def duel_socket(websocket: WebSocket):
         await websocket.send_json({"type": "error", "message": str(e), "suggestions": e.suggestions})
         await websocket.close()
         return
+    except ValueError as e:
+        # DuelEngine's own construction-time validation (a Link Monster
+        # placed in defense, a Spell/Trap placed in the Monster Zone, an
+        # unrecognized position string, ...) raises a bare ValueError --
+        # without this, any of those crashed the whole connection instead of
+        # reporting a normal, readable puzzle-authoring error like a bad
+        # card name already does.
+        await websocket.send_json({"type": "error", "message": str(e)})
+        await websocket.close()
+        return
     _active_duels += 1
 
     try:

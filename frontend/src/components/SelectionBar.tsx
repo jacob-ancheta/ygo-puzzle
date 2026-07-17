@@ -8,12 +8,16 @@ interface Props {
   canFinish?: boolean;
   onFinish?: () => void;
   finishLabel?: string;
+  rejected?: boolean;
 }
 
-export default function SelectionBar({ label, count, min, max, canConfirm, onConfirm, canFinish, onFinish, finishLabel }: Props) {
+export default function SelectionBar({ label, count, min, max, canConfirm, onConfirm, canFinish, onFinish, finishLabel, rejected }: Props) {
   return (
     <div className="selection-bar">
       <span>{label} &mdash; selected {count} (need {min}{max !== min ? `-${max}` : ""})</span>
+      {rejected && (
+        <span className="selection-bar-error">That selection wasn't accepted -- pick a different combination.</span>
+      )}
       <div className="selection-bar-actions">
         {canFinish ? (
           <button className="btn" onClick={onFinish}>{finishLabel ?? "Finish"}</button>

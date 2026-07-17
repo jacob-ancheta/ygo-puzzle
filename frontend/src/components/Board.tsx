@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { BoardState, ZoneCard } from "../boardState";
-import { LOC, POS, zoneKey } from "../boardState";
+import { LOC, zoneKey } from "../boardState";
 import type { CardRef } from "../protocol";
-import { hiddenZoneGroups, idleBattleOptionsFor, matchCardIndex, matchZoneIndex, type Loc } from "../interaction";
+import { hiddenZoneGroups, idleBattleOptionsFor, isSumOptionSelectable, matchCardIndex, matchZoneIndex, type Loc } from "../interaction";
 import CardTile from "./CardTile";
 import ChainOverlay from "./ChainOverlay";
 import PileCell from "./PileCell";
@@ -248,10 +248,28 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       const count = typeof pile === "number" ? pile : pile.length;
       const cards = typeof pile === "number" ? undefined : pile;
       const openLabel = kind === "deck" ? "Deck" : "Extra Deck";
-      // Only the player's OWN Extra Deck ever offers a real Special Summon
-      // option -- never the plain Deck (you never hand-pick a card to act
-      // on directly from there), and never the opponent's Extra Deck.
-      const locFor = kind === "extra" && controller === 0
+      // Both the player's own Deck and Extra Deck can offer a real Special
+      // Summon option -- normally only Extra Deck monsters do, but a card
+      // that's been shuffled OUT of the Extra Deck and into the Deck by an
+      // effect (e.g. an effect that returns a Synchro/Xyz monster to a
+      // player's Deck) can still be a legal Synchro/Xyz material target,
+      // and the engine reports that option with location_id = LOC.EXTRA
+      // regardless of where the card actually sits (ygopro-core's own
+      // convention: every such Special Summon is tagged "from the Extra
+      // Deck" for protocol purposes, not the card's literal current zone).
+      // Without this, that option is offered by the engine but has no
+      // corresponding clickable card anywhere in the UI at all -- the
+      // Extra Deck pile view only lists what's actually still in
+      // board.extra, so a card the engine has already moved to the Deck
+      // (and is offering as a summon target from there) was completely
+      // unreachable to click on (reproduced live: Gungnir shuffled into
+      // the Deck by The Transmigration Prophecy, later legitimately
+      // offered as a Synchro Summon target, with no way to select it).
+      // Never the plain, ordinary case for either player's Deck contents
+      // that aren't offered as anything -- idleBattleOptionsFor only ever
+      // returns options the engine actually offered at this exact
+      // location, so this is inert unless the engine says otherwise.
+      const locFor = controller === 0
         ? (i: number) => ({ controller: 0, location_id: LOC.EXTRA, sequence: i })
         : undefined;
       return (
@@ -405,6 +423,10 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           ) : (
             handCards.map((card, i) => {
               const loc: Loc = { controller: 0, location_id: LOC.HAND, sequence: i };
+              // How many earlier hand cards share this exact code -- lets
+              // matchCardIndex tell apart multiple copies of the same card
+              // instead of every copy resolving to the same prompt index.
+              const duplicateRank = handCards.slice(0, i).filter((c) => c.code === card.code).length;
               return (
                 <ZoneCardSlot
                   key={`${card.code}-${i}`}
@@ -417,6 +439,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
                   onUnselectChoice={onUnselectChoice}
                   onCardDetail={onCardDetail}
                   pendingFinalChoice={pendingFinalChoice}
+                  duplicateRank={duplicateRank}
                 />
               );
             })
@@ -435,6 +458,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         )}
         <SelectionOverlay
           groups={overlayGroups}
+          prompt={prompt}
           selection={selection}
           isUnselectPrompt={isUnselectPrompt}
           onToggle={isUnselectPrompt ? onUnselectChoice : onSelectToggle}
@@ -463,7 +487,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
 }
 
 function ZoneCardSlot({
-  card, loc, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onCardDetail, showStats, pendingFinalChoice, enlarged, chainLinkBadge,
+  card, loc, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onCardDetail, showStats, pendingFinalChoice, enlarged, chainLinkBadge, duplicateRank,
 }: {
   card: ZoneCard;
   loc: Loc;
@@ -477,12 +501,16 @@ function ZoneCardSlot({
   pendingFinalChoice?: number | null;
   enlarged?: boolean;
   chainLinkBadge?: number;
+  // How many earlier same-code hand cards precede this one -- see
+  // matchCardIndex's docstring. Only meaningful for LOC.HAND; irrelevant
+  // (and unused) for field zones, which already match by exact sequence.
+  duplicateRank?: number;
 }) {
   const idleBattleOptions = idleBattleOptionsFor(prompt, card.code, loc);
   const hasMaterials = (card.materials?.length ?? 0) > 0;
   const actionable = idleBattleOptions.length > 0 || hasMaterials;
 
-  const selectIdx = matchCardIndex(prompt, card.code, loc);
+  const selectIdx = matchCardIndex(prompt, card.code, loc, duplicateRank);
   const isUnselectPrompt = prompt?.prompt === "select_unselect";
   // MSG_SELECT_SUM may carry materials the engine already made compulsory
   // while narrowing the legal combination.  They are not present in
@@ -501,17 +529,18 @@ function ZoneCardSlot({
   const selected = isRequiredSumMaterial || (isUnselectPrompt
     ? alreadySelected
     : (selectIdx !== null && selection.includes(selectIdx)));
-  const selectable = selectIdx !== null && !isRequiredSumMaterial;
+  // For a "sum" prompt specifically, a card that COULD still be picked by
+  // matchCardIndex isn't necessarily one that can actually complete a legal
+  // material combination -- see isSumOptionSelectable's docstring.
+  const selectable = selectIdx !== null && !isRequiredSumMaterial
+    && (prompt?.prompt !== "sum" || isSumOptionSelectable(prompt, selection, selectIdx));
 
-  const isFaceDown = Boolean(card.position && (card.position & POS.FACEDOWN_ATTACK || card.position & POS.FACEDOWN_DEFENSE));
-  // Hidden from detail view only when it's the OPPONENT's face-down card --
-  // the player's own set cards are never actually hidden information *to
-  // the player*: they set it, they know what it is. Only suppress the
-  // detail panel for a genuinely unknown (opponent) face-down card.
-  const isHiddenFromPlayer = isFaceDown && loc.controller === 1;
-
+  // Never hidden from detail view, face-down or not, either player's card --
+  // this is a solved-position puzzle, not a ladder game (see the opponent's
+  // hand pile view, which already shows full card info the same way): there
+  // is no genuinely hidden information for the player to preserve here.
   const handleClick = (e: MouseEvent) => {
-    if (!isHiddenFromPlayer) onCardDetail(card);
+    onCardDetail(card);
     if (actionable) {
       onCardMenu(card, idleBattleOptions, e.clientX, e.clientY, card.materials);
     } else if (selectable) {

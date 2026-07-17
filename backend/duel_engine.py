@@ -48,8 +48,8 @@ class PuzzleLoadError(Exception):
 
 
 def resolve_all(puzzle):
-    names = [e["name"] for e in puzzle["opponent_field"]]
-    names += puzzle["player_hand"] + puzzle["player_deck"] + puzzle["player_extra"]
+    names = [e["name"] for e in puzzle.get("opponent_field", [])]
+    names += puzzle.get("player_hand", []) + puzzle.get("player_deck", []) + puzzle.get("player_extra", [])
     names += [e["name"] for e in puzzle.get("player_field", [])]
     names += puzzle.get("player_banished", [])
     names += puzzle.get("player_graveyard", [])
@@ -135,7 +135,7 @@ _setup_script_ids = itertools.count()
 
 def build_puzzle_setup_script(puzzle):
     lines = []
-    for i, entry in enumerate(puzzle["opponent_field"]):
+    for i, entry in enumerate(puzzle.get("opponent_field", [])):
         summon_type = entry.get("summoned")
         if not summon_type:
             continue
@@ -206,6 +206,7 @@ POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE, POS_FACEDOWN_DEFENSE = 0x1, 0x4, 0x8
 # scripts pass for szone placements.
 POS_FACEUP, POS_FACEDOWN = 0x5, 0xa
 QUERY_ATTACK, QUERY_DEFENSE, QUERY_OVERLAY_CARD = 0x100, 0x200, 0x10000
+TYPE_MONSTER = 0x1
 TYPE_LINK = 0x4000000
 DUEL_ATTACK_FIRST_TURN = 0x02  # puzzles are constructed positions, not turn 1 of a real match --
                                 # without this, the engine correctly (but unhelpfully) blocks
@@ -285,6 +286,27 @@ class DuelEngine:
         lib.set_player_info(ctypes.c_ssize_t(self.pduel), 1, puzzle["lp"]["opponent"], 0, 1)
 
         def field_position(entry, card):
+            # opponent_field/player_field are Monster Zone only -- a Spell or
+            # Trap card belongs in opponent_spelltrap/player_spelltrap
+            # instead. Without this check, a misplaced Trap/Spell here still
+            # gets happily placed (new_card doesn't validate zone-vs-type),
+            # and then silently mis-renders: the position strings this
+            # function understands ("attack"/"defense"/"set") don't include
+            # a Trap/Spell's actual "face-down" concept, so it falls through
+            # to POS_FACEUP_DEFENSE below regardless of what was written --
+            # reproduced live as "a Trap I set as face-down showed up face-up
+            # in the Monster Zone." Fail loudly at load instead, the same
+            # place a bad card name or an invalid position string fails.
+            if not card["type"] & TYPE_MONSTER:
+                raise ValueError(
+                    f"puzzle places non-Monster {entry['name']!r} in opponent_field/player_field "
+                    "(Monster Zone) -- Spell/Trap cards belong in opponent_spelltrap/"
+                    "player_spelltrap instead")
+            if entry["position"] not in ("attack", "defense", "set"):
+                raise ValueError(
+                    f"unknown position {entry['position']!r} for {entry['name']!r} in "
+                    "opponent_field/player_field -- expected 'attack', 'defense', or 'set' "
+                    "(face-down defense)")
             # Link Monsters have no DEF and no defense position, by game
             # rule, under any circumstance -- the engine enforces it for
             # everything summoned through real mechanics, so the one hole is
@@ -299,14 +321,20 @@ class DuelEngine:
                 return POS_FACEDOWN_DEFENSE
             return POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
 
-        for i, entry in enumerate(puzzle["opponent_field"]):
+        for i, entry in enumerate(puzzle.get("opponent_field", [])):
             card = self.resolved[entry["name"]]
             self._place(card["code"], 1, LOCATION_MZONE, i, field_position(entry, card))
-        for i, name in enumerate(puzzle["player_hand"]):
+        # Direct puzzle["player_hand"]/["player_deck"]/["player_extra"] would
+        # KeyError for a puzzle that omits one entirely (e.g. a puzzle whose
+        # solve needs no further draws, so player_deck has nothing in it) --
+        # .get(..., []) matches every other zone's already-optional treatment
+        # (player_field, player_banished, ...) rather than forcing every
+        # puzzle to spell out an empty list for a zone it doesn't use.
+        for i, name in enumerate(puzzle.get("player_hand", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_HAND, i, POS_FACEUP_ATTACK)
-        for i, name in enumerate(puzzle["player_deck"]):
+        for i, name in enumerate(puzzle.get("player_deck", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_DECK, i, POS_FACEUP_ATTACK)
-        for i, name in enumerate(puzzle["player_extra"]):
+        for i, name in enumerate(puzzle.get("player_extra", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)
         # Optional, symmetric with opponent_field -- lets a puzzle start
         # mid-combo with the player's own monsters already on the field or
@@ -416,11 +444,11 @@ def initial_board_state(engine):
         "lp": dict(puzzle["lp"]),
         "opponent_field": [
             {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
-            for i, entry in enumerate(puzzle["opponent_field"])
+            for i, entry in enumerate(puzzle.get("opponent_field", []))
         ],
-        "player_hand": [brief(name) for name in puzzle["player_hand"]],
-        "player_deck": [brief(name) for name in puzzle["player_deck"]],
-        "player_extra": [brief(name) for name in puzzle["player_extra"]],
+        "player_hand": [brief(name) for name in puzzle.get("player_hand", [])],
+        "player_deck": [brief(name) for name in puzzle.get("player_deck", [])],
+        "player_extra": [brief(name) for name in puzzle.get("player_extra", [])],
         "player_field": [
             {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
             for i, entry in enumerate(puzzle.get("player_field", []))
@@ -562,8 +590,6 @@ def card_name(code):
     info = get_card(code & 0x7fffffff)
     return info["name"] if info else f"unknown({code})"
 
-
-TYPE_MONSTER = 0x1
 
 def card_brief(code):
     code &= 0x7fffffff
@@ -1608,16 +1634,71 @@ def run(engine):
                             "location_id": loc, "sequence": seq, "position": 0}
                 opt_items.append((code, sum_param, loc_info))
 
+            # Two independent bugs were stacked here, found by reading
+            # ygopro-core's actual select_with_sum_limit/select_sum_check1
+            # in playerop.cpp directly (not guessing from black-box
+            # behavior):
+            #
+            # 1) WRONG RESPONSE LAYOUT (the real cause of silently
+            # consuming the wrong material). select_with_sum_limit's step-1
+            # handler reads chosen opt indices as
+            # `returns.bvalue[i + 1]` for `i` from `mcount` (== must_n) up
+            # to `bvalue[0]` (the total count) -- i.e. the wire format is
+            # `[total_count, <must_n placeholder bytes>, <opt indices...>]`.
+            # We were sending `[total_count, <opt indices...>]` with NO
+            # placeholder bytes for the must-include slots. With must_n=1
+            # (the common single-tuner case) that shifts every opt index we
+            # send one byte early, so the core's *last* expected byte reads
+            # past what we actually sent into `set_responseb`'s zeroed
+            # 256-byte buffer -- always resolving to index 0. Confirmed
+            # directly: submitting indices for "Storm Dragon + Smoke Ball"
+            # silently consumed "Turbulence + Smoke Ball" instead whenever
+            # Turbulence (index 0) wasn't one of the intended materials --
+            # every single-tuner sum prompt in the game was affected, not
+            # just Gungnir/Trishula specifically.
+            #
+            # 2) ORDER WITHIN THE OPT INDICES. select_sum_check1 walks
+            # must_items then the submitted opt values *in submission
+            # order*, requiring a strictly positive running remainder at
+            # every step except the last, which must land on an exact
+            # match. That means the values must be submitted
+            # largest-first -- confirmed against the engine once (1) was
+            # fixed. (An earlier version of this comment concluded the
+            # opposite, sorting by ascending *index*; that conclusion was
+            # drawn from behavior corrupted by bug (1) above and didn't
+            # hold up once the missing placeholder bytes were restored.)
+            def sorted_by_level_desc(indices):
+                return sorted(indices, key=lambda i: opt_items[i][1], reverse=True)
+
             if player == 1:
                 chosen = engine.opponent_ai.choose_sum(must_n, len(opt_items), min_sel, max_sel)
-                engine.send_b([len(chosen) + must_n] + chosen)
+                chosen = sorted_by_level_desc(chosen)
+                engine.send_b([len(chosen) + must_n] + [0] * must_n + chosen)
                 pending = stream.u8()
                 if pending == MSG_RETRY:
                     pending = None
             if pending is None and player == 1:
                 def ask():
                     codes = [c for c, _, _ in opt_items]
-                    lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
+                    # min_sel/max_sel as sent over the wire already have
+                    # ygopro-core's own must-select offset baked in (see
+                    # operations.cpp's select_synchro/xyz_material: it passes
+                    # `min - (mcount - 1)`, `max - (mcount - 1)` into
+                    # select_with_sum_limit, and that function's own
+                    # acceptance check adds `mcount` back when validating the
+                    # client's total submitted count). Net effect: min_sel/
+                    # max_sel already equal the correct bounds on "how many
+                    # MORE to pick beyond must_include" -- subtracting must_n
+                    # again here double-counts it. For a single mandatory
+                    # material (must_n=1, the common case: one fixed tuner)
+                    # that extra subtraction happens to land on exactly the
+                    # single valid answer, collapsing an [1,1] window to
+                    # [0,0] and making a legal selection look unconfirmable
+                    # client-side (reproduced live: Formula Synchron's
+                    # Confirm button stayed disabled with the one correct
+                    # material selected, for a puzzle needing exactly 1
+                    # tuner + 1 non-tuner with no other legal combination).
+                    lo, hi = min_sel, max_sel
                     chosen = yield from ask_indices(
                         {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
                          "min": lo, "max": hi,
@@ -1625,19 +1706,23 @@ def run(engine):
                          "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
                          "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
                         len(codes), lo, hi)
-                    engine.send_b([len(chosen) + must_n] + chosen)
+                    chosen = sorted_by_level_desc(chosen)
+                    engine.send_b([len(chosen) + must_n] + [0] * must_n + chosen)
                 pending = yield from interact(engine, ask)
             elif player != 1:
                 def ask():
                     codes = [c for c, _, _ in opt_items]
-                    lo, hi = max(0, min_sel - must_n), max(0, max_sel - must_n)
+                    # See the player==1 branch above for why min_sel/max_sel
+                    # are used as-is (no further -must_n subtraction).
+                    lo, hi = min_sel, max_sel
                     chosen = yield from ask_indices(
                         {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
                          "min": lo, "max": hi, "source": chain_source(),
                          "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
                          "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
                         len(codes), lo, hi)
-                    engine.send_b([len(chosen) + must_n] + chosen)
+                    chosen = sorted_by_level_desc(chosen)
+                    engine.send_b([len(chosen) + must_n] + [0] * must_n + chosen)
                 pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_COUNTER:
