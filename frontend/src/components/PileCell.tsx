@@ -21,9 +21,14 @@ interface Props {
   enlarged?: boolean;
   /** Chain link number to flash on top of the pile while `enlarged`. */
   chainLinkBadge?: number;
+  /** Same persistent glow a field/hand card gets via .card-tile.actionable
+   * (see App.css) -- reused here so a pile that currently has something
+   * legally summonable/activatable in it (e.g. your own GY or Extra Deck)
+   * reads the same way as any other actionable card, not a separate look. */
+  actionable?: boolean;
 }
 
-export default function PileCell({ label, count, hidden, topCard, clickable, onOpen, onCardDetail, enlarged, chainLinkBadge }: Props) {
+export default function PileCell({ label, count, hidden, topCard, clickable, onOpen, onCardDetail, enlarged, chainLinkBadge, actionable }: Props) {
   if (count === 0) {
     return (
       <div className="card-slot pile-cell empty">
@@ -37,7 +42,7 @@ export default function PileCell({ label, count, hidden, topCard, clickable, onO
 
   return (
     <div
-      className={`card-slot card-tile pile-cell ${clickable ? "selectable" : ""} ${enlarged ? "enlarged" : ""}`}
+      className={`card-slot card-tile pile-cell ${clickable ? "selectable" : ""} ${enlarged ? "enlarged" : ""} ${actionable ? "actionable" : ""}`}
       onClick={clickable ? () => { onOpen?.(); if (showFace) onCardDetail?.(topCard!); } : undefined}
       title={showFace ? topCard!.name : label}
     >
