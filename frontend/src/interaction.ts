@@ -75,6 +75,21 @@ export function idleBattleOptionsFor(prompt: Record<string, unknown> | null, cod
     && option.location.sequence === loc.sequence);
 }
 
+/**
+ * Whether at least one currently offered idle/battle option originates from
+ * this exact (controller, location_id) zone -- for a pile-level "something
+ * in here is actionable right now" glow (GY/Extra Deck). Unlike
+ * idleBattleOptionsFor, this isn't matching a single card: a pile renders
+ * one merged tile that can stand in for several different cards (e.g. 3
+ * GY monsters), so there's no one card code to check against -- only "is
+ * this zone, as a whole, offering anything right now".
+ */
+export function isPileActionable(prompt: Record<string, unknown> | null, controller: number, locationId: number): boolean {
+  if (!prompt || (prompt.prompt !== "idlecmd" && prompt.prompt !== "battlecmd")) return false;
+  const options = prompt.options as IdleBattleOption[];
+  return options.some(({ location }) => location?.controller === controller && location?.location_id === locationId);
+}
+
 export function nonCardOptions(prompt: Record<string, unknown> | null) {
   if (!prompt || (prompt.prompt !== "idlecmd" && prompt.prompt !== "battlecmd")) return [];
   const options = prompt.options as IdleBattleOption[];

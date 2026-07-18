@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { BoardState, ZoneCard } from "../boardState";
 import { LOC, zoneKey } from "../boardState";
 import type { CardRef } from "../protocol";
-import { hiddenZoneGroups, idleBattleOptionsFor, isSumOptionSelectable, matchCardIndex, matchZoneIndex, type Loc } from "../interaction";
+import { hiddenZoneGroups, idleBattleOptionsFor, isPileActionable, isSumOptionSelectable, matchCardIndex, matchZoneIndex, type Loc } from "../interaction";
 import CardTile from "./CardTile";
 import ChainOverlay from "./ChainOverlay";
 import PileCell from "./PileCell";
@@ -288,6 +288,11 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       const locFor = controller === 0
         ? (i: number) => ({ controller: 0, location_id: LOC.EXTRA, sequence: i })
         : undefined;
+      // Own Extra Deck only -- a Special Summon option from here is exactly
+      // the "something's playable" cue the actionable glow already gives
+      // field/hand cards elsewhere. Never the opponent's: their legal plays
+      // aren't the player's to see coming.
+      const extraActionable = kind === "extra" && controller === 0 && isPileActionable(prompt, 0, LOC.EXTRA);
       return (
         <PileCell
           key={`${kind}-${controller}`}
@@ -296,6 +301,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           hidden
           clickable={Boolean(cards && cards.length > 0)}
           onOpen={cards ? () => setPileView({ label: openLabel, cards, locFor }) : undefined}
+          actionable={extraActionable}
         />
       );
     }
@@ -313,6 +319,11 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       : undefined;
     const locationId = kind === "gy" ? LOC.GY : LOC.BANISHED;
     const isEnlarged = enlargedPile?.controller === controller && enlargedPile?.locationId === locationId;
+    // Own GY only, same reasoning as Extra Deck above -- a GY-activatable
+    // card (e.g. Kuribohrn's own reactive effect) makes the pile glow;
+    // Banished never does (nothing in this app's card pool activates from
+    // there), and the opponent's GY never does regardless.
+    const gyActionable = kind === "gy" && controller === 0 && isPileActionable(prompt, 0, LOC.GY);
     return (
       <PileCell
         key={`${kind}-${controller}`}
@@ -324,6 +335,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         onCardDetail={onCardDetail}
         enlarged={isEnlarged}
         chainLinkBadge={isEnlarged ? enlargedChainLink ?? undefined : undefined}
+        actionable={gyActionable}
       />
     );
   }
