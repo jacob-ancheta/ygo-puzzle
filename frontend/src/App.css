@@ -1333,14 +1333,19 @@ textarea.text-input {
   .card-slot { max-width: 24px; }
 
   /* .side-controls (priority toggle / restart / leaderboard) is
-     position:fixed and doesn't reserve layout space -- confirmed live it
-     overlaps .piles-column at this viewport size. The header's far-right
-     corner is already claimed by AuthPanel (confirmed live: right:4px
-     collided with it) -- there's a large untouched gap between the "Duel
-     Puzzdle" h1 and .connection-status instead, so it goes there. */
+     position:fixed on desktop and doesn't reserve layout space -- confirmed
+     live it overlaps .piles-column at this viewport size. A prior fix
+     pinned it to a fixed left:95px gap between the "Duel Puzzdle" h1 and
+     .connection-status, but that gap only exists when the puzzle has no
+     .puzzle-title -- with one (e.g. "That's not how it works in Edison"),
+     the title fills that same space and the fixed-position buttons render
+     on top of it (reproduced live). It's now DOM-nested inside .app-header
+     itself (see App.tsx), so dropping position:fixed here makes it a normal
+     flex child that lands in whatever gap the title (ellipsis-truncated,
+     see .puzzle-title) actually left, however long it is, with no
+     hardcoded guess and no separate row needed. */
   .side-controls {
-    top: 4px; left: 95px; right: auto; bottom: auto;
-    transform: none;
+    position: static;
     flex-direction: row;
     align-items: center;
     gap: 4px;
@@ -1356,6 +1361,17 @@ textarea.text-input {
     gap: 3px;
   }
   .priority-toggle-label, .restart-button-label { font-size: 8px; }
+  /* .btn.small (Leaderboard/Feedback) wasn't shrunk by anything above --
+     at its full desktop size (12px font, 4px/9px padding) it's visibly
+     taller than the resized Toggle/Restart buttons next to it, pushing the
+     whole row's height past the header's own and spilling above it
+     (confirmed live: a -5px top offset against the header's bounds).
+     Scoped to .side-controls specifically so the same class elsewhere
+     (PileViewOverlay's per-item buttons, etc.) is untouched. */
+  .side-controls .btn.small {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
   .priority-toggle-state, .restart-button-key { font-size: 9px; padding: 1px 5px; }
 
   /* Same fixed-position problem -- moves just under the header instead of
