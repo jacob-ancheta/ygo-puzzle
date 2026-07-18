@@ -5,6 +5,15 @@ export interface CardRef {
   code: number;
   name: string;
   type?: number;
+  // Every applicable type tag (e.g. ["Effect", "Tuner", "Synchro"] or
+  // ["Quick-Play"]) -- see backend/card_convert.py's full_type_tags, the
+  // single source of truth this mirrors so the frontend never needs its own
+  // copy of the type bitmask -> label mapping.
+  type_tags?: string[];
+  // Monster-only, already decoded to a human label ("LIGHT", "Spellcaster")
+  // server-side -- see card_convert.py's decode_attribute/decode_race.
+  attribute?: string;
+  race?: string;
   attack?: number;
   defense?: number;
   level?: number;

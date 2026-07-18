@@ -22,6 +22,7 @@ import random
 import ctypes
 from ctypes import c_int32, c_uint32, c_uint8, c_char_p, c_void_p, POINTER, Structure, CFUNCTYPE
 
+from card_convert import decode_attribute, decode_race, full_type_tags
 from card_lookup import get_card, get_card_by_name, search_cards
 from opponent_ai import OpponentAI
 
@@ -620,6 +621,7 @@ def card_brief(code):
         return {"code": code, "name": f"unknown({code})"}
     brief = {
         "code": code, "name": info["name"], "type": info["type"], "desc": info["desc"],
+        "type_tags": full_type_tags(info["type"]),
         "image_full": f"/card_images/full/{code}.jpg",
         "image_cropped": f"/card_images/cropped/{code}.jpg",
     }
@@ -627,6 +629,8 @@ def card_brief(code):
         brief["attack"] = info["attack"]
         brief["defense"] = info["defense"]
         brief["level"] = info["level"]
+        brief["attribute"] = decode_attribute(info["attribute"])
+        brief["race"] = decode_race(info["race"])
     return brief
 
 
