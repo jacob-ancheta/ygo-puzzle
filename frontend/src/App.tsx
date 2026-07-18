@@ -681,6 +681,39 @@ export default function App() {
           <h1>Duel Puzzdle</h1>
           {board.puzzleTitle && <span className="puzzle-title">{board.puzzleTitle}</span>}
         </div>
+
+        {/* DOM-nested inside the header (not a sibling after it) purely so
+            the mobile-landscape breakpoint can lay it out as a normal flex
+            child of .app-header, sitting in whatever gap is actually left
+            after the (ellipsis-truncated) title instead of a hardcoded
+            guess -- see the position:static override in App.css. Desktop's
+            position:fixed is unaffected by DOM position (fixed elements are
+            positioned against the viewport regardless of where they sit in
+            the tree), so this is a no-op there. */}
+        <div className="side-controls">
+          <button
+            className={`priority-toggle ${priorityOn ? "on" : "off"}`}
+            onClick={(e) => { setPriorityOn((v) => !v); e.currentTarget.blur(); }}
+            title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
+          >
+            <span className="priority-toggle-label">Toggle</span>
+            <span className="priority-toggle-state">{priorityOn ? "ON" : "OFF"}</span>
+          </button>
+
+          <button className="restart-button" onClick={restart} title="Restart the puzzle (R)">
+            <span className="restart-button-label">Restart</span>
+            <span className="restart-button-key">R</span>
+          </button>
+
+          <button className="btn small" onClick={() => setShowLeaderboard(true)} title="Today's top solvers">
+            Leaderboard
+          </button>
+
+          <button className="btn small" onClick={() => setShowFeedback(true)} title="Report a bug or suggest a puzzle">
+            Feedback
+          </button>
+        </div>
+
         <div className="connection-status">
           <span className={`dot ${connected ? "connected" : "disconnected"}`} />
           {connected ? "Connected" : "Disconnected"}
@@ -688,30 +721,6 @@ export default function App() {
         <ResetCountdown />
         <AuthPanel user={user} accessToken={session?.access_token} signInWithEmail={signInWithEmail} signOut={signOut} />
       </header>
-
-      <div className="side-controls">
-        <button
-          className={`priority-toggle ${priorityOn ? "on" : "off"}`}
-          onClick={(e) => { setPriorityOn((v) => !v); e.currentTarget.blur(); }}
-          title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
-        >
-          <span className="priority-toggle-label">Toggle</span>
-          <span className="priority-toggle-state">{priorityOn ? "ON" : "OFF"}</span>
-        </button>
-
-        <button className="restart-button" onClick={restart} title="Restart the puzzle (R)">
-          <span className="restart-button-label">Restart</span>
-          <span className="restart-button-key">R</span>
-        </button>
-
-        <button className="btn small" onClick={() => setShowLeaderboard(true)} title="Today's top solvers">
-          Leaderboard
-        </button>
-
-        <button className="btn small" onClick={() => setShowFeedback(true)} title="Report a bug or suggest a puzzle">
-          Feedback
-        </button>
-      </div>
 
       {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
 
