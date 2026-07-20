@@ -4,26 +4,20 @@
 
 Every day brings a new pre-set duel: a fixed board, a fixed hand, and one real solution. Find the exact sequence of plays that wins the duel under the real rules, against an opponent AI.
 
-🔗 **Play it now: [duelpuzzdle.xyz](https://duelpuzzdle.xyz)**
+**Play it now: [duelpuzzdle.xyz](https://duelpuzzdle.xyz)**
 
-<!-- IMAGE 1: A screenshot of the main board mid-puzzle (desktop view), showing
-     the field, hand, and card detail panel. This is the "hero" shot -- insert
-     it right below this line. -->
 
-## What makes it different
+<img width="1611" height="855" alt="image" src="https://github.com/user-attachments/assets/373d9857-5a68-4a0b-a513-c04eab7425dc" />
 
-Most Yu-Gi-Oh "puzzles" you find online are just descriptions — you read the board state and work it out on paper. Duel Puzzdle actually **plays out**: every card interaction, every chain, every ruling is resolved by the genuine Yu-Gi-Oh duel engine, the same one real simulators are built on. If your line doesn't respect priority, timing, or a card's actual wording, it won't work — exactly like the real game.
-
-- **A real duel engine, not a simulation of one.** The backend embeds [ygopro-core](https://github.com/Fluorohydride/ygopro-core) (the open-source C++ engine used by real Yu-Gi-Oh duel simulators) together with the official [ygopro-scripts](https://github.com/Fluorohydride/ygopro-scripts) card scripts, driven live over a WebSocket. Every card behaves exactly as it does in the real game — full chains, quick effects, negation windows, the works.
-- **One new puzzle a day**, rotating at 4pm Eastern — everyone gets the same board on the same day.
-- **Leaderboard** for today's puzzle, with optional sign-in to track your record.
-- **Playable on desktop and mobile.**
-
-<!-- IMAGE 2: Optional -- a screenshot of the leaderboard or the win modal
-     after solving a puzzle. Insert it here if you want a second image; skip
-     this section entirely if one hero image is enough. -->
 
 ## How it works
+
+- **A real duel engine, not a simulation of one.** The backend embeds [ygopro-core](https://github.com/Fluorohydride/ygopro-core) (the open-source C++ engine used by real Yu-Gi-Oh duel simulators) together with the official [ygopro-scripts](https://github.com/Fluorohydride/ygopro-scripts) card scripts, driven live over a WebSocket. Every card behaves exactly as it does in the game: full chains, quick effects, negation windows, etc.
+- **One new puzzle a day**, rotating at 4pm EST, everyone gets the same board on the same day.
+- **Leaderboard** for today's puzzle, with optional sign-in to track your record. You get to show off all your medals each time you hit the leaderboard!
+- **Playable on desktop and mobile.**
+
+<img width="842" height="583" alt="image" src="https://github.com/user-attachments/assets/9ccd7c82-66e0-4740-9dca-8d54ad8b71e7" />
 
 Each day's puzzle is authored as a simple Python file describing the board: what's on each field, what's in each hand, what's face-down, what's in the graveyard. That file is loaded straight into a live instance of the real duel engine, so from the very first move you're playing against actual game rules, not a hand-written approximation of them.
 
@@ -37,11 +31,9 @@ Each day's puzzle is authored as a simple Python file describing the board: what
 | **Auth / leaderboard** | Supabase |
 | **Analytics** | Vercel Web Analytics |
 
-
 ## Acknowledgments
 
 - [Fluorohydride/ygopro-core](https://github.com/Fluorohydride/ygopro-core) and [Fluorohydride/ygopro-scripts](https://github.com/Fluorohydride/ygopro-scripts) — the real duel engine and card scripts this project is built on.
+- Assisted development with [Claude](https://claude.com).
 - Card data sourced from the official [ygopro-database](https://github.com/mycard/ygopro-database).
-- Assisted with [Claude](https://claude.com).
-
 
