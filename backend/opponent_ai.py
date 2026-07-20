@@ -15,6 +15,12 @@ import random
 
 from card_lookup import get_card_by_name
 
+# Must match duel_engine.py's own module-level ATTACK_DECLARED literal
+# exactly -- can't import it directly (duel_engine.py imports *this*
+# module, so the reverse would be circular), so the string is duplicated
+# here instead, cross-referenced by comment on both ends.
+_ATTACK_DECLARED = "attack_declared"
+
 
 def _resolve_names(names):
     """A single name, a list of names, or None/"random" -> a set of codes
@@ -27,6 +33,37 @@ def _resolve_names(names):
         names = [names]
     codes = set()
     for name in names:
+        card = get_card_by_name(name)
+        if card is None:
+            raise ValueError(f"eff_behaviour references unknown card name: {name!r}")
+        codes.add(card["code"])
+    return codes
+
+
+def _resolve_trigger_names(names):
+    """Like _resolve_names, but for respond_to/avoid specifically -- these
+    match against a trigger_code, which can also be duel_engine.py's
+    ATTACK_DECLARED sentinel (set at MSG_ATTACK, since an attack declaration
+    isn't a card activation and has no code of its own) rather than a real
+    card. "attack" is recognized as that sentinel here -- e.g. Lunalight
+    Liger Dancer's board-wipe is a plain Quick Effect usable any time by its
+    own card text, but "respond_to": "attack" scopes the AI's policy to
+    only actually take it when responding to an attack declaration, leaving
+    every other ambient opportunity alone.
+
+    Deliberately not merged into _resolve_names: that function also backs
+    `target` (what to select once activated), where "attack" wouldn't mean
+    anything -- a target always names an actual selectable card.
+    """
+    if not names or names == "random":
+        return None
+    if isinstance(names, str):
+        names = [names]
+    codes = set()
+    for name in names:
+        if name == "attack":
+            codes.add(_ATTACK_DECLARED)
+            continue
         card = get_card_by_name(name)
         if card is None:
             raise ValueError(f"eff_behaviour references unknown card name: {name!r}")
@@ -67,14 +104,14 @@ class OpponentAI:
             code = resolved[entry["name"]]["code"]
             self.policies[code] = {
                 "trigger": behaviour.get("trigger", "always"),
-                "respond_to": _resolve_names(behaviour.get("respond_to")),
+                "respond_to": _resolve_trigger_names(behaviour.get("respond_to")),
                 # Inverse of respond_to -- skip an otherwise-legal activation
                 # opportunity when it was triggered by one of these specific
                 # cards (e.g. Baronne de Fleur's negate should fire on
                 # anything *except* Puppet Plant). respond_to alone can't
                 # express "everything except X" without enumerating every
                 # other card in the puzzle by name.
-                "avoid": _resolve_names(behaviour.get("avoid")),
+                "avoid": _resolve_trigger_names(behaviour.get("avoid")),
                 # Restricts which side's activation counts as a trigger --
                 # "opponent" (relative to whichever side this policy's own
                 # card is on, always player 1/the AI here) means player 0,
