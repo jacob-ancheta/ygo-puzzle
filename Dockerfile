@@ -91,6 +91,15 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/*.py /app/backend/
 COPY backend/cards.db /app/backend/cards.db
 
+# Written here, before the puzzle clone+validate step below, since
+# validate_puzzles.py needs DLL_PATH/SCRIPTS_DIR to actually load the
+# engine at build time -- not just what server.py needs at startup.
+RUN printf '%s\n' \
+    'MINGW_BIN = ""' \
+    'DLL_PATH = "/app/libocgcore.so"' \
+    'SCRIPTS_DIR = "/app/ygopro-scripts"' \
+    > /app/backend/local_config.py
+
 # Puzzle content lives in a separate PRIVATE repo, not this one -- this repo
 # is public, and committing puzzle files straight into it used to mean
 # anyone browsing GitHub could read a future/unplayed puzzle's full board
@@ -103,21 +112,21 @@ COPY backend/cards.db /app/backend/cards.db
 # never written to any image layer (unlike a plain ARG/ENV would be).
 # TODO(jacob): create the private repo and set the puzzles_repo_token
 # secret file in Render before this build will succeed -- see README.
+#
+# validate_puzzles.py then loads every puzzle file into the real engine
+# right here, at build time -- a bad puzzle (typo'd card name, a board the
+# engine rejects) fails the build, so Render just keeps serving the last
+# good image instead of shipping a broken puzzle.
 RUN --mount=type=secret,id=puzzles_repo_token,dst=/run/secrets/puzzles_repo_token \
     git clone --depth 1 \
         "https://oauth2:$(cat /run/secrets/puzzles_repo_token)@github.com/jacob-ancheta/ygo-puzzle-puzzles.git" \
         /tmp/puzzles-repo \
     && mkdir -p /app/backend/puzzles \
     && cp /tmp/puzzles-repo/*.py /app/backend/puzzles/ \
-    && rm -rf /tmp/puzzles-repo
+    && rm -rf /tmp/puzzles-repo \
+    && cd /app/backend && python validate_puzzles.py
 
 COPY backend/card_images /app/backend/card_images
-
-RUN printf '%s\n' \
-    'MINGW_BIN = ""' \
-    'DLL_PATH = "/app/libocgcore.so"' \
-    'SCRIPTS_DIR = "/app/ygopro-scripts"' \
-    > /app/backend/local_config.py
 
 EXPOSE 8000
 WORKDIR /app/backend
