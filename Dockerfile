@@ -1,3 +1,8 @@
+# syntax=docker/dockerfile:1.7
+# The line above is a BuildKit parser directive, not a comment -- it MUST be
+# the very first line of the file, before even this comment block, or the
+# --mount=type=secret step below (which needs BuildKit) is silently ignored.
+
 # Backend-only image (frontend is a separate static Vite build, deployed to
 # Vercel rather than served from here). Proves the actual unknown in the
 # deploy roadmap: does ygopro-core (the ctypes duel engine) + its Lua card
@@ -85,7 +90,27 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend/*.py /app/backend/
 COPY backend/cards.db /app/backend/cards.db
-COPY backend/puzzles /app/backend/puzzles
+
+# Puzzle content lives in a separate PRIVATE repo, not this one -- this repo
+# is public, and committing puzzle files straight into it used to mean
+# anyone browsing GitHub could read a future/unplayed puzzle's full board
+# state and solution days before it actually went live (reproduced live:
+# several future-dated puzzles were sitting here, fully spoiled, before
+# their go-live day). The repo URL itself isn't sensitive (it just says
+# "puzzles live over there") -- only the token that can actually clone it
+# is, so that's the one thing kept out of the Dockerfile itself: it's
+# mounted from a Render "Secret File" for just this one RUN step and is
+# never written to any image layer (unlike a plain ARG/ENV would be).
+# TODO(jacob): create the private repo and set the puzzles_repo_token
+# secret file in Render before this build will succeed -- see README.
+RUN --mount=type=secret,id=puzzles_repo_token,dst=/run/secrets/puzzles_repo_token \
+    git clone --depth 1 \
+        "https://oauth2:$(cat /run/secrets/puzzles_repo_token)@github.com/jacob-ancheta/ygo-puzzle-puzzles.git" \
+        /tmp/puzzles-repo \
+    && mkdir -p /app/backend/puzzles \
+    && cp /tmp/puzzles-repo/*.py /app/backend/puzzles/ \
+    && rm -rf /tmp/puzzles-repo
+
 COPY backend/card_images /app/backend/card_images
 
 RUN printf '%s\n' \

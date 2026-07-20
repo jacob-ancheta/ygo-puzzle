@@ -11,3 +11,13 @@ backend/local_config.py
 .env.local
 frontend/.env
 frontend/.env.local
+
+# Puzzle content lives in a separate private repo now, not this public one --
+# committing them here used to mean anyone browsing GitHub could read
+# future-dated (unplayed) puzzles' full board state and solution days before
+# they went live (reproduced live: 2026-07-20 through 2026-07-23 were
+# already exposed here while only up to 2026-07-19 had actually rotated in).
+# Local dev still just drops puzzle .py files straight into this same
+# backend/puzzles/ directory -- they're only untracked *from git*, nothing
+# about how puzzle_registry.py discovers/loads them changes.
+backend/puzzles/*.py
