@@ -40,6 +40,16 @@ if os.path.exists(MINGW_BIN):
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Sentinel last_chaining_code can hold besides a real card code -- an attack
+# declaration isn't itself an "activation", so there's no card code for it,
+# but it's still a genuine reactive-trigger opportunity (Kuribohrn/Mirror
+# Force's "when an opponent's monster declares an attack" effects). Module
+# level (not just local to run()) so opponent_ai.py's eff_behaviour
+# resolution can recognize the same literal via its own "attack" sentinel in
+# respond_to/avoid (see _resolve_names there) without a circular import --
+# opponent_ai.py is imported *by* this module, so it can't import back.
+ATTACK_DECLARED = "attack_declared"
+
 
 class PuzzleLoadError(Exception):
     def __init__(self, failed, suggestions):
@@ -60,6 +70,7 @@ def resolve_all(puzzle):
     names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
     names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
     names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]
+    names += puzzle.get("opponent_extra", [])
     resolved, failed = {}, []
     for name in names:
         card = get_card_by_name(name)
@@ -352,6 +363,15 @@ class DuelEngine:
             self._place(self.resolved[name]["code"], 0, LOCATION_DECK, i, POS_FACEUP_ATTACK)
         for i, name in enumerate(puzzle.get("player_extra", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)
+        # Optional, symmetric with player_extra -- lets a puzzle give the
+        # opponent's own Extra Deck monsters something to actually do, e.g.
+        # paying an Extra Deck cost ("send 1 'Lunalight' monster from your
+        # Extra Deck to the GY"). Its contents stay hidden from the client
+        # the same way the opponent's main Deck already is -- see
+        # initial_board_state's opponent_extra_count and boardState.ts's
+        # board.extra[1], both a count rather than the real card list.
+        for i, name in enumerate(puzzle.get("opponent_extra", [])):
+            self._place(self.resolved[name]["code"], 1, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)
         # Optional, symmetric with opponent_field -- lets a puzzle start
         # mid-combo with the player's own monsters already on the field or
         # already banished, instead of only ever starting from hand/deck.
@@ -489,6 +509,11 @@ def initial_board_state(engine):
             {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
             for i, entry in enumerate(puzzle.get("opponent_spelltrap", []))
         ],
+        # Count only, not the card list -- symmetric with how the opponent's
+        # main Deck is already hidden from the client (boardState.ts's
+        # board.extra[1]/board.deck[1] are plain numbers for the opponent,
+        # real ZoneCard[] arrays only for the player's own).
+        "opponent_extra_count": len(puzzle.get("opponent_extra", [])),
     }
 
 
@@ -822,20 +847,13 @@ def run(engine):
     # `trigger_controller` restriction (e.g. Baronne de Fleur's negate should
     # only fire on the *opponent's* activations, never the AI's own cards).
     last_chaining_controller = None
-    # Sentinel last_chaining_code can hold besides a real card code -- set
-    # instead of a code at MSG_ATTACK (an attack declaration isn't itself an
-    # "activation", so there's no card code to put here, but it's still a
-    # genuine reactive-trigger opportunity, e.g. Kuribohrn/Mirror Force's
-    # "when an opponent's monster declares an attack" effects). Exists so
-    # should_activate's require_trigger gate (see opponent_ai.py) sees *some*
-    # trigger and doesn't mistake this for an untriggered ignition effect the
-    # way it would if trigger_code stayed None. Note this means an
-    # eff_behaviour's respond_to/avoid (which only ever hold real card
-    # codes) can never match an attack-declaration trigger -- fine for every
-    # current puzzle, but a puzzle that needs to key an attack-triggered
-    # effect's respond_to/avoid off a specific card would need a real code
-    # here instead.
-    ATTACK_DECLARED = "attack_declared"
+    # ATTACK_DECLARED (module level, above) gets set here instead of a code
+    # at MSG_ATTACK. Exists so should_activate's require_trigger gate (see
+    # opponent_ai.py) sees *some* trigger and doesn't mistake this for an
+    # untriggered ignition effect the way it would if trigger_code stayed
+    # None -- and opponent_ai.py's "attack" respond_to/avoid sentinel can
+    # match it directly, for a card whose eff_behaviour should only react to
+    # an attack declaration specifically (any attacker), not a real card.
     # Card code for each chain link, keyed by link number (1-indexed,
     # matching MSG_CHAINING's chain_size / MSG_CHAIN_SOLVING's link number).
     # Built up as links get added to the chain -- which can span several

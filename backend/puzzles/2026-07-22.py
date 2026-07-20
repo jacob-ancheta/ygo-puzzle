@@ -7,7 +7,7 @@ The filename (YYYY-MM-DD.py) is the date this puzzle is served on.
 """
 
 PUZZLE = {
-    "title": "No accesscode?",
+    "title": "No Accesscode?",
     "lp": {"player": 8000, "opponent": 7000},
 
     # opponent's board -- position is "attack" or "defense".
