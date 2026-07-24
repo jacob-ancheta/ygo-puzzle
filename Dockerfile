@@ -117,7 +117,20 @@ RUN printf '%s\n' \
 # right here, at build time -- a bad puzzle (typo'd card name, a board the
 # engine rejects) fails the build, so Render just keeps serving the last
 # good image instead of shipping a broken puzzle.
+#
+# PUZZLES_CACHEBUST exists purely to defeat Docker layer caching -- nothing
+# in *this* repo changes when a puzzle is pushed to the separate private
+# puzzles repo, so without this, Docker sees an identical RUN command and
+# happily reuses the previous build's result verbatim (confirmed live: a
+# real deploy served stale puzzle content because this exact step got
+# CACHED). Render passes service env vars through as Docker build args
+# automatically, and the puzzles repo's own deploy workflow bumps this env
+# var to a fresh value via Render's API right before triggering each
+# deploy -- so its value changes on every real puzzle push, which is
+# exactly what invalidates this layer's cache each time.
+ARG PUZZLES_CACHEBUST=0
 RUN --mount=type=secret,id=puzzles_repo_token,dst=/run/secrets/puzzles_repo_token \
+    echo "cachebust=$PUZZLES_CACHEBUST" && \
     git clone --depth 1 \
         "https://oauth2:$(cat /run/secrets/puzzles_repo_token)@github.com/jacob-ancheta/ygo-puzzle-puzzles.git" \
         /tmp/puzzles-repo \
