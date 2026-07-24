@@ -176,11 +176,20 @@ export default function PromptOverlay({ prompt, respond, contextCard }: Props) {
     return <TextPrompt title="Announce a card by name" placeholder="Exact card name" onSubmit={(name) => respond({ name })} />;
   }
 
-  if (kind === "announce_race" || kind === "announce_attrib") {
-    const label = kind === "announce_race" ? "race" : "attribute";
+  if (kind === "announce_attrib") {
+    return (
+      <AnnounceAttribute
+        count={prompt.count as number}
+        available={prompt.available as number}
+        onSubmit={(value) => respond({ value })}
+      />
+    );
+  }
+
+  if (kind === "announce_race") {
     return (
       <TextPrompt
-        title={`Announce ${label} bitmask (available: ${(prompt.available as number).toString(16)})`}
+        title={`Announce race bitmask (available: ${(prompt.available as number).toString(16)})`}
         placeholder="0x..."
         onSubmit={(text) => respond({ value: parseInt(text, text.startsWith("0x") ? 16 : 10) || 0 })}
       />
@@ -218,6 +227,70 @@ function TextPrompt({ title, placeholder, onSubmit }: { title: string; placehold
       <input className="text-input" value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder} maxLength={100} autoFocus />
       <div className="modal-actions">
         <button className="btn primary" onClick={() => onSubmit(value)}>Submit</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Matches backend/card_convert.py's ATTRIBUTE_NAMES bit values exactly --
+// these aren't sequential/guessable (see that file's own comment).
+const ATTRIBUTES: { bit: number; name: string }[] = [
+  { bit: 0x01, name: "EARTH" },
+  { bit: 0x02, name: "WATER" },
+  { bit: 0x04, name: "FIRE" },
+  { bit: 0x08, name: "WIND" },
+  { bit: 0x10, name: "LIGHT" },
+  { bit: 0x20, name: "DARK" },
+  { bit: 0x40, name: "DIVINE" },
+];
+
+function AnnounceAttribute({ count, available, onSubmit }: { count: number; available: number; onSubmit: (value: number) => void }) {
+  const [selected, setSelected] = useState<number[]>([]);
+  const options = ATTRIBUTES.filter((a) => available & a.bit);
+
+  // count === 1 is by far the common case (e.g. Disciple of the Forbidden
+  // Spell) -- submit immediately on click rather than making the player
+  // click a button twice for a single choice.
+  if (count === 1) {
+    return (
+      <Modal title="Declare an Attribute">
+        <div className="modal-actions">
+          {options.map(({ bit, name }) => (
+            <button key={bit} className="btn" onClick={() => onSubmit(bit)}>{name}</button>
+          ))}
+        </div>
+      </Modal>
+    );
+  }
+
+  const toggle = (bit: number) => {
+    setSelected((prev) =>
+      prev.includes(bit) ? prev.filter((b) => b !== bit)
+        : prev.length < count ? [...prev, bit] : prev
+    );
+  };
+
+  return (
+    <Modal title={`Declare ${count} different Attributes`}>
+      <div className="modal-actions">
+        {options.map(({ bit, name }) => (
+          <button
+            key={bit}
+            className={`btn${selected.includes(bit) ? " primary" : ""}`}
+            onClick={() => toggle(bit)}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      <div className="modal-actions">
+        <button
+          className="btn primary"
+          disabled={selected.length !== count}
+          onClick={() => onSubmit(selected.reduce((acc, b) => acc | b, 0))}
+        >
+          Confirm {selected.length !== count ? `(${selected.length}/${count})` : ""}
+        </button>
       </div>
     </Modal>
   );
