@@ -753,9 +753,9 @@ export default function App() {
           </button>
         </div>
 
-        <div className="connection-status">
+        <div className="connection-status" title={connected ? "Connected" : "Disconnected"}>
           <span className={`dot ${connected ? "connected" : "disconnected"}`} />
-          {connected ? "Connected" : "Disconnected"}
+          <span className="connection-status-label">{connected ? "Connected" : "Disconnected"}</span>
         </div>
         <ResetCountdown />
         <AuthPanel user={user} accessToken={session?.access_token} signInWithEmail={signInWithEmail} signOut={signOut} />
@@ -839,7 +839,7 @@ export default function App() {
 
       {viewingDate !== null && (
         <div className="notice-banner archive-banner">
-          <span>Viewing an archived puzzle ({viewingDate}) -- wins here don't count toward the leaderboard.</span>
+          <span>Viewing an archived puzzle ({viewingDate})</span>
           <button className="btn small" onClick={() => goToPuzzle(null)}>Back to Today</button>
         </div>
       )}

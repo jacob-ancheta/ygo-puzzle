@@ -19,7 +19,7 @@ export default function ResetCountdown() {
 
   return (
     <div className="reset-countdown" title="Time until today's puzzle rotates (4pm Eastern)">
-      Resets in {formatDuration(remainingMs)}
+      <span className="reset-countdown-label">Resets in </span>{formatDuration(remainingMs)}
     </div>
   );
 }

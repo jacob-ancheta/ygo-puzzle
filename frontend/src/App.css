@@ -846,6 +846,14 @@
   font-size: 13px;
   cursor: pointer;
   transition: background 0.12s ease;
+  /* A flex sibling with no rigid content (unlike .priority-toggle/
+     .restart-button, which split their text into fixed <span> children)
+     can shrink well below its natural text width and wrap -- confirmed
+     live with .archive-button in a squeezed .side-controls row: it alone
+     wrapped onto two lines while its neighbors stayed put, since flex-
+     shrink concentrates on whichever item is still free to give ground.
+     Button labels should ellipsize under real pressure, never wrap. */
+  white-space: nowrap;
 }
 .btn:hover { background: var(--ink-600); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -899,6 +907,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   background: var(--accent-dim);
   border: 1px solid var(--accent);
   border-radius: 10px;
@@ -937,6 +946,7 @@
   color: var(--ink-300);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
 .priority-toggle-state,
@@ -946,6 +956,7 @@
   padding: 2px 12px;
   border-radius: 6px;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .priority-toggle.on .priority-toggle-state { background: var(--accent-dim); color: var(--ink-950); }
@@ -1333,10 +1344,38 @@ textarea.text-input {
   .app-main { grid-template-columns: 1fr min(280px, 32%); grid-template-rows: 1fr; }
   .board-main { flex-direction: row; }
 
-  .app-header { padding: 4px 10px; }
-  .app-header h1 { font-size: 13px; }
-  .connection-status { font-size: 11px; }
+  .app-header { padding: 4px 10px; gap: 6px; }
+  /* h1's text ("Duel Puzzdle") wraps onto two lines by default once
+     header-brand gets squeezed this tight, blowing the header out to
+     ~51px tall against its own ~35px budget (confirmed live) -- nowrap
+     keeps it a single line and lets it ellipsize instead, matching how
+     .puzzle-title right next to it already behaves. */
+  .app-header h1 {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* header-brand's own gap (12px, tuned for spacious desktop) plus
+     .puzzle-title's 30vw cap were together the single biggest space hog in
+     this row at phone-landscape widths -- confirmed live, they left the 5
+     side-controls buttons + connection status + countdown + auth panel no
+     room to avoid overflowing (silently clipped by .app's overflow-x:
+     hidden). Neither figure was reachable without dropping straight into
+     this breakpoint's own numbers instead of scaling the desktop ones. */
+  .header-brand { gap: 6px; }
+  .puzzle-title { max-width: 22vw; padding-left: 6px; }
+  /* Dot alone still conveys connected/disconnected at a glance (title
+     attribute on the container -- see App.tsx -- carries the same text for
+     anyone who needs it spelled out); the label text was pure width cost
+     at this size. */
+  .connection-status { font-size: 11px; gap: 4px; }
+  .connection-status-label { display: none; }
   .reset-countdown { font-size: 11px; }
+  /* Countdown digits alone (title attribute on the container still spells
+     out what they mean) -- "Resets in " was the largest single piece of
+     this row's non-essential text. */
+  .reset-countdown-label { display: none; }
   .app-main { padding: 4px 6px; }
   .board { padding: 4px 6px; gap: 4px; }
 
@@ -1407,6 +1446,15 @@ textarea.text-input {
      hardcoded guess and no separate row needed. */
   .side-controls {
     position: static;
+    /* The base rule's transform:translateY(-50%) exists to vertically
+       center a position:fixed element against the whole viewport -- it
+       doesn't get discarded just because position above switches back to
+       static, and percentage translateY is relative to the element's OWN
+       (now much shorter) height, so it was still shifting this whole row
+       up by ~half its height. Confirmed live: every button's top edge
+       clipped against the header's own top edge as a result -- exactly
+       the "cut off pill" look, not a sizing/overflow issue at all. */
+    transform: none;
     flex-direction: row;
     align-items: center;
     gap: 4px;
