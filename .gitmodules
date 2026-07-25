@@ -1,0 +1,3 @@
+[submodule "backend/puzzles"]
+	path = backend/puzzles
+	url = https://github.com/jacob-ancheta/ygo-puzzle-puzzles.git
