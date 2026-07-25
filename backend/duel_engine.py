@@ -175,6 +175,48 @@ def build_puzzle_setup_script(puzzle, resolved):
                 lines.append(
                     f"Debug.AddCard({code}, {owner}, {owner}, LOCATION_MZONE, {i}, 0, false)"
                 )
+    # Optional -- lets a puzzle start with an Equip Card (e.g. an opponent's
+    # Equip Spell) already attached to a monster, instead of every equip
+    # relationship only ever forming during play. Confirmed empirically
+    # (not just from reading ygopro-core's source) that Debug.PreEquip only
+    # accepts an equip source that's actually sitting in the Spell/Trap
+    # zone -- a face-up monster can't be pre-equipped to another monster
+    # this way (that's how a card like Getsu Fuhma's own "equip a monster
+    # to itself" effect would need to start pre-resolved, and there's no
+    # setup-time equivalent for it: Duel.Equip, the real in-effect version,
+    # refuses to run outside actual effect resolution ("Action is not
+    # allowed here"), so that specific case just isn't puzzle-representable
+    # yet -- only "Spell/Trap already equipped to a monster" is.
+    SIDE_OWNER = {"player": 0, "opponent": 1}
+    for owner, zone_key in ((0, "player_spelltrap"), (1, "opponent_spelltrap")):
+        for i, entry in enumerate(puzzle.get(zone_key, [])):
+            equip_target = entry.get("equip_target")
+            if not equip_target:
+                continue
+            if entry.get("position") != "faceup":
+                raise ValueError(
+                    f"{entry['name']!r} in {zone_key} declares equip_target but its position "
+                    f"is {entry.get('position')!r} -- only a face-up ('faceup') Spell/Trap can "
+                    "start already equipped to something"
+                )
+            target_side = equip_target.get("side")
+            if target_side not in SIDE_OWNER:
+                raise ValueError(
+                    f"{entry['name']!r}'s equip_target needs \"side\": \"player\" or \"opponent\", "
+                    f"got {target_side!r}"
+                )
+            target_index = equip_target.get("index")
+            if not isinstance(target_index, int):
+                raise ValueError(
+                    f"{entry['name']!r}'s equip_target needs an integer \"index\" (position in "
+                    f"that side's *_field list), got {target_index!r}"
+                )
+            target_owner = SIDE_OWNER[target_side]
+            lines.append(
+                f"do local eq = Duel.GetFieldCard({owner}, LOCATION_SZONE, {i}) "
+                f"local tgt = Duel.GetFieldCard({target_owner}, LOCATION_MZONE, {target_index}) "
+                f"if eq and tgt then Debug.PreEquip(eq, tgt) end end"
+            )
     return "\n".join(lines).encode()
 
 
