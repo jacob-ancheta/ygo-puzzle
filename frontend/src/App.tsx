@@ -11,6 +11,7 @@ import CardTile from "./components/CardTile";
 import AuthPanel from "./components/AuthPanel";
 import ResetCountdown from "./components/ResetCountdown";
 import LeaderboardModal from "./components/LeaderboardModal";
+import ArchiveModal from "./components/ArchiveModal";
 import FeedbackModal from "./components/FeedbackModal";
 import LossModal from "./components/LossModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
@@ -111,20 +112,44 @@ export default function App() {
     if (justSignedIn) connect();
   }, [user, connect]);
 
+  // Which archived puzzle (see ArchiveModal) is currently being played, or
+  // null for today's live puzzle. Purely a client-side viewing choice --
+  // the server already refuses to record leaderboard credit for anything
+  // but the actual current date (see server.py's is_current_puzzle), this
+  // just drives the UI (disabling the Leaderboard button, the archive
+  // banner below, and which puzzle the rotation/restart effects replay).
+  const [viewingDate, setViewingDate] = useState<string | null>(null);
+  // Mirrors viewingDate for the rotation-reconnect effect below, which
+  // fires from a setTimeout closure created once at mount (deps: [connect]
+  // only) and would otherwise only ever see the null it captured then.
+  const viewingDateRef = useRef<string | null>(null);
+  useEffect(() => { viewingDateRef.current = viewingDate; }, [viewingDate]);
+
+  function goToPuzzle(date: string | null) {
+    setViewingDate(date);
+    connect(date);
+  }
+
   // Auto-reconnect the instant today's puzzle rotates (see ResetCountdown,
   // which shares this same boundary) -- without this, a tab left open past
   // midnight Eastern would just silently keep playing/showing yesterday's
   // puzzle until the player manually refreshed. Deliberately reconnects
   // unconditionally, mid-attempt or not: a puzzle-of-the-day is meant to
   // become a new puzzle-of-the-day the moment the day turns over, same as
-  // reloading the page would get you.
+  // reloading the page would get you. Skipped entirely while viewing an
+  // archived puzzle -- that's a deliberate, purely client-side choice (see
+  // viewingDate above), and forcibly yanking the player back to today the
+  // moment the clock rolls over would undo it with no warning.
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
     function scheduleNext() {
       // +1s past the exact boundary so the backend's own "today" (computed
       // independently, server-side, off its own clock) has unambiguously
       // rolled over by the time this fires.
-      timeoutId = setTimeout(() => { connect(); scheduleNext(); }, msUntilNextRotation() + 1000);
+      timeoutId = setTimeout(() => {
+        if (viewingDateRef.current === null) connect();
+        scheduleNext();
+      }, msUntilNextRotation() + 1000);
     }
     scheduleNext();
     return () => clearTimeout(timeoutId);
@@ -256,6 +281,7 @@ export default function App() {
   }, []);
 
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
 
   // Symmetric open/close (not "open once, dismiss manually") so a restart
@@ -692,6 +718,14 @@ export default function App() {
             the tree), so this is a no-op there. */}
         <div className="side-controls">
           <button
+            className="archive-button"
+            onClick={() => setShowArchive(true)}
+            title="Play a previous day's puzzle (doesn't affect the leaderboard)"
+          >
+            🗄 Archive
+          </button>
+
+          <button
             className={`priority-toggle ${priorityOn ? "on" : "off"}`}
             onClick={(e) => { setPriorityOn((v) => !v); e.currentTarget.blur(); }}
             title="When OFF, priority is passed automatically whenever a quick effect could be activated, and opponent activations resolve without a chance to respond"
@@ -705,7 +739,12 @@ export default function App() {
             <span className="restart-button-key">R</span>
           </button>
 
-          <button className="btn small" onClick={() => setShowLeaderboard(true)} title="Today's top solvers">
+          <button
+            className="btn small"
+            onClick={() => setShowLeaderboard(true)}
+            disabled={viewingDate !== null}
+            title={viewingDate !== null ? "Disabled while viewing an archived puzzle" : "Today's top solvers"}
+          >
             Leaderboard
           </button>
 
@@ -724,6 +763,14 @@ export default function App() {
 
       {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
 
+      {showArchive && (
+        <ArchiveModal
+          currentDate={viewingDate}
+          onSelect={(date) => { goToPuzzle(date); setShowArchive(false); }}
+          onClose={() => setShowArchive(false)}
+        />
+      )}
+
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
 
       {showWinModal && (
@@ -731,6 +778,7 @@ export default function App() {
           winSummary={board.winSummary}
           communityPosition={board.communityPosition}
           claimToken={board.claimToken}
+          isArchived={viewingDate !== null}
           signInWithEmail={signInWithEmail}
           onClose={() => setShowWinModal(false)}
         />
@@ -788,6 +836,13 @@ export default function App() {
       )}
 
       {siteNotice && <div className="notice-banner">{siteNotice}</div>}
+
+      {viewingDate !== null && (
+        <div className="notice-banner archive-banner">
+          <span>Viewing an archived puzzle ({viewingDate}) -- wins here don't count toward the leaderboard.</span>
+          <button className="btn small" onClick={() => goToPuzzle(null)}>Back to Today</button>
+        </div>
+      )}
 
       {error ? (
         <div className="error-banner">

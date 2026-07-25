@@ -97,7 +97,21 @@ def health():
 
 @app.get("/puzzles")
 def list_puzzles():
-    return {"today": puzzle_registry.today_str(), "dates": puzzle_registry.public_dates()}
+    # Titles power the frontend's archive picker (see ArchiveModal) -- dates
+    # alone aren't enough to let a player recognize a past puzzle at a
+    # glance. load_puzzle() is cached, so this is cheap after the first hit.
+    #
+    # archived_dates(), not public_dates(): this list is browsable (every
+    # entry gets its own clickable button in the archive UI), so it must
+    # stay today-or-earlier unconditionally -- including on a local machine
+    # with ALLOW_FUTURE_PUZZLES set, where public_dates() would otherwise
+    # surface an unreleased puzzle as something to casually click into.
+    dates = puzzle_registry.archived_dates()
+    puzzles = [
+        {"date": d, "title": puzzle_registry.load_puzzle(d).get("title")}
+        for d in dates
+    ]
+    return {"today": puzzle_registry.today_str(), "puzzles": puzzles}
 
 
 @app.get("/notice")

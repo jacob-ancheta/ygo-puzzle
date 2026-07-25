@@ -63,8 +63,21 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
   // since that's usually about when someone has gotten around to clicking
   // into it.
   const terminalRef = useRef(false);
+  // The archived puzzle date currently being played, null for today, or
+  // undefined if the picker (ArchiveModal, via connect(date)) has never
+  // been used this session -- set only by an explicit connect(date) call
+  // and otherwise left alone, so every other connect() call site (restart,
+  // the post-sign-in reconnect, the daily-rotation reconnect) keeps
+  // replaying whichever puzzle -- today's or an archived one -- was already
+  // in progress instead of silently snapping back to today. Starting at
+  // undefined rather than null specifically preserves WS_URL's own baked-in
+  // ?date= (a local-only override for previewing a future puzzle, see
+  // .env.example) until the player actually picks something from the
+  // archive -- see the "leave untouched" branch below.
+  const dateRef = useRef<string | null | undefined>(undefined);
 
-  const connect = useCallback(() => {
+  const connect = useCallback((date?: string | null) => {
+    if (date !== undefined) dateRef.current = date;
     if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
     wsRef.current?.close();
     setBoard(createInitialBoard());
@@ -78,8 +91,24 @@ export function useDuelSocket(url: string, getToken?: () => string | undefined) 
 
     const open = () => {
       const token = getToken?.();
-      const fullUrl = token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
-      const ws = new WebSocket(fullUrl);
+      // URL.searchParams.set, not string concatenation -- WS_URL can
+      // already carry its own ?date= (a local-dev override for previewing
+      // a specific puzzle, see .env.example), and naively appending would
+      // produce two conflicting "date" params instead of this picker
+      // correctly overriding (or, for "today", clearing) whatever was
+      // already baked into the base URL.
+      const wsUrl = new URL(url);
+      if (token) wsUrl.searchParams.set("token", token);
+      else wsUrl.searchParams.delete("token");
+      // undefined: the archive picker has never been touched -- leave
+      // WS_URL's own ?date= (if any) exactly as-is. Only once the player
+      // has explicitly picked a date (or explicitly picked "today") does
+      // this hook start actively managing the param itself.
+      if (dateRef.current !== undefined) {
+        if (dateRef.current) wsUrl.searchParams.set("date", dateRef.current);
+        else wsUrl.searchParams.delete("date");
+      }
+      const ws = new WebSocket(wsUrl.toString());
       wsRef.current = ws;
 
       ws.onopen = () => {

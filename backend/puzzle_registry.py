@@ -65,6 +65,17 @@ def public_dates():
     return [d for d in available_dates() if d <= today]
 
 
+def archived_dates():
+    """Dates safe to list in a browsable "past puzzles" UI -- always
+    today-or-earlier, even when ALLOW_FUTURE_PUZZLES is set locally. That
+    escape hatch is only meant to let one future-dated puzzle be previewed
+    directly via ?date= before it's pushed; it must NOT also make that
+    puzzle show up in a list the same local session can browse into
+    unreleased puzzles from, which public_dates() would otherwise allow."""
+    today = today_str()
+    return [d for d in available_dates() if d <= today]
+
+
 def today_str():
     now = datetime.now(ROTATION_TZ)
     if now.hour < ROTATION_HOUR:

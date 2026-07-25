@@ -17,6 +17,13 @@ interface Props {
   // CLAIM_TOKEN_SECRET configured. See App.tsx's claim-on-sign-in effect for
   // the other half of this flow.
   claimToken: string | null | undefined;
+  // True while playing an archived puzzle (see App.tsx's viewingDate) --
+  // the server never records a win for anything but the actual current
+  // date (see server.py's is_current_puzzle), so winSummary/communityPosition
+  // are always null here anyway. Rather than render today's leaderboard and
+  // sign-in CTAs next to a win that can't appear on either, this swaps in a
+  // plain static "solved it" modal instead.
+  isArchived: boolean;
   signInWithEmail: (email: string, redirectTo: string, redirectToForNewAccount?: string) => Promise<SignInResult>;
   onClose: () => void;
 }
@@ -36,7 +43,7 @@ export function ordinal(n: number): string {
   }
 }
 
-export default function WinModal({ winSummary, communityPosition, claimToken, signInWithEmail, onClose }: Props) {
+export default function WinModal({ winSummary, communityPosition, claimToken, isArchived, signInWithEmail, onClose }: Props) {
   const { rows, error } = useTodayLeaderboard();
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
   const [showSignIn, setShowSignIn] = useState(false);
@@ -92,6 +99,24 @@ export default function WinModal({ winSummary, communityPosition, claimToken, si
       // Permission denied or similar -- nothing useful to do beyond not
       // pretending it worked; the text is still visible in the modal.
     }
+  }
+
+  // Static, no daily-puzzle trimmings: an archived win never has a
+  // winSummary/communityPosition (see is_current_puzzle in server.py) and
+  // never will, so there's no leaderboard, share position, or sign-in CTA
+  // to show here -- just an acknowledgment.
+  if (isArchived) {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal">
+          <h3>🎉 Solved it!</h3>
+          <p>You solved this archived puzzle.</p>
+          <div className="modal-actions">
+            <button className="btn primary" onClick={onClose}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
