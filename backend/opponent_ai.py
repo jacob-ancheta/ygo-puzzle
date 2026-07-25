@@ -126,6 +126,16 @@ class OpponentAI:
                 # see should_activate's require_trigger for why this
                 # defaults to off.
                 "proactive": bool(behaviour.get("proactive")),
+                # Narrows "respond_to": "attack" from "an attack was
+                # declared" (any attack, useful for e.g. a GY effect that
+                # doesn't care which monster got attacked) down to "*this*
+                # card specifically is the one being attacked" -- e.g. two
+                # copies of the same monster on the field share one policy
+                # (keyed by code), but only one of them is actually the
+                # attack's target at a time. See choose_chain's per-candidate
+                # location comparison, which is what actually tells the two
+                # apart -- code alone can't.
+                "self_target_only": bool(behaviour.get("self_target_only")),
             }
 
         # Keyed by (code, desc) rather than just code -- a card like
@@ -147,7 +157,8 @@ class OpponentAI:
 
     # ---- whether-to-activate decisions ----
 
-    def should_activate(self, code, desc, trigger_code=None, trigger_controller=None, require_trigger=False):
+    def should_activate(self, code, desc, trigger_code=None, trigger_controller=None, require_trigger=False,
+                         self_is_target=False):
         policy = self.policies.get(code)
         if not policy:
             return False
@@ -187,21 +198,38 @@ class OpponentAI:
             # Force/Kuribohrn shouldn't count as an opportunity, let alone
             # get negated.
             return False
+        if policy.get("self_target_only") and not self_is_target:
+            # Same "not a matching opportunity at all" reasoning as the
+            # gates above -- e.g. with two Lunalight Liger Dancers on the
+            # field sharing this exact policy, only the one actually
+            # targeted by the current attack should count; the other one
+            # merely being legal to activate (its own target-existence
+            # condition happens to be met too) isn't an opportunity for it.
+            return False
         if policy["trigger"] == "first" and (code, desc) in self.activated:
             return False
         return True
 
-    def choose_chain(self, chains, trigger_code, trigger_controller=None):
-        """chains: list of (forced, code, desc). Returns an index to pick,
-        or -1 to pass (only meaningful when nothing in the list is forced)."""
-        any_forced = any(forced for forced, _, _ in chains)
+    def choose_chain(self, chains, trigger_code, trigger_controller=None, attack_target_location=None):
+        """chains: list of (forced, code, desc, location). Returns an index
+        to pick, or -1 to pass (only meaningful when nothing in the list is
+        forced)."""
+        def is_target(location):
+            # attack_target_location is None both outside of an attack
+            # window and for a direct attack (no monster target) -- either
+            # way, nothing should count as "the" target then.
+            return attack_target_location is not None and location == attack_target_location
+
+        any_forced = any(forced for forced, _, _, _ in chains)
         if any_forced:
-            for i, (forced, code, desc) in enumerate(chains):
-                if forced and self.should_activate(code, desc, trigger_code, trigger_controller):
+            for i, (forced, code, desc, location) in enumerate(chains):
+                if forced and self.should_activate(code, desc, trigger_code, trigger_controller,
+                                                     self_is_target=is_target(location)):
                     return i
-            return next(i for i, (forced, _, _) in enumerate(chains) if forced)
-        for i, (_forced, code, desc) in enumerate(chains):
-            if self.should_activate(code, desc, trigger_code, trigger_controller):
+            return next(i for i, (forced, _, _, _) in enumerate(chains) if forced)
+        for i, (_forced, code, desc, location) in enumerate(chains):
+            if self.should_activate(code, desc, trigger_code, trigger_controller,
+                                     self_is_target=is_target(location)):
                 return i
         return -1
 

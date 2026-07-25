@@ -889,6 +889,16 @@ def run(engine):
     # `trigger_controller` restriction (e.g. Baronne de Fleur's negate should
     # only fire on the *opponent's* activations, never the AI's own cards).
     last_chaining_controller = None
+    # Packed location (card.get_info_location() -- same encoding ygopro-core
+    # uses for MSG_SELECT_CHAIN's per-candidate location field below) of
+    # whichever card is the target of the attack currently open for
+    # responses, or None outside of that window / for a direct attack (no
+    # monster target). Drives eff_behaviour's `self_target_only` restriction:
+    # unlike `respond_to`/`trigger_controller`, which only look at *what*
+    # triggered (any code, any side), this is a *per-candidate* check --
+    # two cards can share the exact same code (e.g. two copies of Lunalight
+    # Liger Dancer) and only one of them is actually the one being attacked.
+    last_attack_target_location = None
     # ATTACK_DECLARED (module level, above) gets set here instead of a code
     # at MSG_ATTACK. Exists so should_activate's require_trigger gate (see
     # opponent_ai.py) sees *some* trigger and doesn't mistake this for an
@@ -1023,6 +1033,7 @@ def run(engine):
             # look as if the previous effect card were requesting them.
             last_chaining_code = None
             last_chaining_controller = None
+            last_attack_target_location = None
             chain_link_cards.clear()
             yield {"type": "event", "event": "chain_end"}
             yield {"type": "event", "event": "stats_update", "cards": query_live_stats(engine)}
@@ -1159,6 +1170,9 @@ def run(engine):
             if last_chaining_code is None:
                 last_chaining_code = ATTACK_DECLARED
                 last_chaining_controller = attacker & 0xff
+                # 0 means a direct attack (no monster target) -- same
+                # sentinel ygopro-core itself writes here (see processor.cpp).
+                last_attack_target_location = target if target else None
             yield {"type": "event", "event": "attack", "attacker": describe_location(attacker),
                    "target": describe_location(target) if target else None}
 
@@ -1180,12 +1194,14 @@ def run(engine):
             if last_chaining_code == ATTACK_DECLARED:
                 last_chaining_code = None
                 last_chaining_controller = None
+                last_attack_target_location = None
             yield {"type": "event", "event": "attack_disabled"}
 
         elif msg == MSG_DAMAGE_STEP_START:
             if last_chaining_code == ATTACK_DECLARED:
                 last_chaining_code = None
                 last_chaining_controller = None
+                last_attack_target_location = None
 
         elif msg == MSG_DAMAGE_STEP_END:
             pass
@@ -1309,7 +1325,7 @@ def run(engine):
         elif msg == MSG_SELECT_EFFECTYN:
             player = stream.u8()
             code = stream.u32()
-            stream.u32()
+            location = stream.u32()
             desc = stream.u32()
             if player == 1:
                 masked_code = code & 0x7fffffff
@@ -1320,9 +1336,11 @@ def run(engine):
                 # trigger) and a reactive one (genuinely responding to
                 # something) are otherwise indistinguishable by an
                 # eff_behaviour policy scoped only to the card's code.
+                self_is_target = (last_attack_target_location is not None
+                                   and location == last_attack_target_location)
                 activate = engine.opponent_ai.should_activate(
                     masked_code, desc, last_chaining_code, last_chaining_controller,
-                    require_trigger=True)
+                    require_trigger=True, self_is_target=self_is_target)
                 if activate:
                     engine.opponent_ai.note_activated(masked_code, desc)
                 engine.send_i(1 if activate else 0)
@@ -1567,16 +1585,22 @@ def run(engine):
                 stream.u8()  # description type, UI-only
                 forced = stream.u8()
                 code = stream.u32() & 0x7fffffff
-                stream.u32()
+                # Packed location of the specific card offering this chain
+                # candidate (card.get_info_location() -- see processor.cpp's
+                # MSG_SELECT_CHAIN write). Two cards can share the exact same
+                # code (e.g. two copies of the same monster), so this is what
+                # lets `self_target_only` (see opponent_ai.py) tell them apart
+                # -- code alone can't.
+                location = stream.u32()
                 desc = stream.u32()
-                chains.append((forced, code, desc))
-            any_forced = any(forced for forced, _, _ in chains)
+                chains.append((forced, code, desc, location))
+            any_forced = any(forced for forced, _, _, _ in chains)
             # A genuine simultaneous trigger's card just changed zone/position
             # (see `recently_touched`) -- as opposed to an always-available
             # quick effect (e.g. a hand monster's "banish X; Special Summon
             # this") that merely happens to be legal right now. Only the
             # latter is safe for the priority toggle to auto-pass.
-            fresh_trigger = any(code in recently_touched for _, code, _ in chains)
+            fresh_trigger = any(code in recently_touched for _, code, _, _ in chains)
 
             if not chains:
                 # nothing available to activate -- don't bother asking, just pass
@@ -1588,7 +1612,8 @@ def run(engine):
                 # opponent decision -- consult the puzzle's per-card
                 # eff_behaviour policy (see opponent_ai.py); a forced chain
                 # must pick one regardless of policy.
-                choice = engine.opponent_ai.choose_chain(chains, last_chaining_code, last_chaining_controller)
+                choice = engine.opponent_ai.choose_chain(
+                    chains, last_chaining_code, last_chaining_controller, last_attack_target_location)
                 if choice != -1:
                     engine.opponent_ai.note_activated(chains[choice][1], chains[choice][2])
                 engine.send_i(choice)
@@ -1597,7 +1622,7 @@ def run(engine):
                     pending = None
             if pending is None and chains and player == 1:
                 options = [{"card": card_brief(code), "desc": desc, "forced": bool(forced)}
-                           for forced, code, desc in chains]
+                           for forced, code, desc, _ in chains]
                 def ask():
                     if any_forced:
                         choice = yield from ask_index(
@@ -1612,7 +1637,7 @@ def run(engine):
                 pending = yield from interact(engine, ask)
             elif chains and player != 1:
                 options = [{"card": card_brief(code), "desc": desc, "forced": bool(forced)}
-                           for forced, code, desc in chains]
+                           for forced, code, desc, _ in chains]
                 def ask():
                     if any_forced:
                         choice = yield from ask_index(
