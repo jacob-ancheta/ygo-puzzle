@@ -35,6 +35,16 @@ except ImportError:
         "/ ygopro-scripts checkout."
     )
 
+try:
+    # Opt-in, local-machine-only -- see local_config.example.py. The
+    # Docker-generated local_config.py on Render only ever defines the three
+    # names above, so this has to be its own best-effort import (same
+    # pattern as puzzle_registry.py's ALLOW_FUTURE_PUZZLES) rather than
+    # folded into the one above, which would make it hard-required.
+    from local_config import REVEAL_OPPONENT_DECK
+except ImportError:
+    REVEAL_OPPONENT_DECK = False
+
 if os.path.exists(MINGW_BIN):
     os.add_dll_directory(MINGW_BIN)
 
@@ -71,6 +81,7 @@ def resolve_all(puzzle):
     names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
     names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]
     names += puzzle.get("opponent_extra", [])
+    names += puzzle.get("opponent_deck", [])
     resolved, failed = {}, []
     for name in names:
         card = get_card_by_name(name)
@@ -414,6 +425,14 @@ class DuelEngine:
         # board.extra[1], both a count rather than the real card list.
         for i, name in enumerate(puzzle.get("opponent_extra", [])):
             self._place(self.resolved[name]["code"], 1, LOCATION_EXTRA, i, POS_FACEUP_ATTACK)
+        # Optional, symmetric with player_deck -- lets a puzzle give the
+        # opponent's own Deck something to actually do, e.g. an effect that
+        # special summons "as many as possible with the same name" from
+        # hand/Deck/GY needing an actual card there to find (see Inferno
+        # Reckless Summon). Same hidden-from-client treatment as
+        # opponent_extra above -- see opponent_deck_count.
+        for i, name in enumerate(puzzle.get("opponent_deck", [])):
+            self._place(self.resolved[name]["code"], 1, LOCATION_DECK, i, POS_FACEUP_ATTACK)
         # Optional, symmetric with opponent_field -- lets a puzzle start
         # mid-combo with the player's own monsters already on the field or
         # already banished, instead of only ever starting from hand/deck.
@@ -556,6 +575,14 @@ def initial_board_state(engine):
         # board.extra[1]/board.deck[1] are plain numbers for the opponent,
         # real ZoneCard[] arrays only for the player's own).
         "opponent_extra_count": len(puzzle.get("opponent_extra", [])),
+        "opponent_deck_count": len(puzzle.get("opponent_deck", [])),
+        # Local-only puzzle-authoring aid (see REVEAL_OPPONENT_DECK above) --
+        # sends the real Deck contents too, alongside the count every build
+        # already gets, so boardState.ts can make the pile browsable the same
+        # way player_deck already is. Omitted entirely (not just empty) when
+        # off, so the client can tell "no debug data" apart from "empty deck".
+        **({"opponent_deck": [brief(name) for name in puzzle.get("opponent_deck", [])]}
+           if REVEAL_OPPONENT_DECK else {}),
     }
 
 
@@ -995,8 +1022,22 @@ def run(engine):
 
         elif msg == MSG_FLIPSUMMONING:
             code = stream.u32() & 0x7fffffff
-            stream.u32()
+            # get_info_location() here is captured by ygopro-core (see
+            # operations.cpp) *after* it already flips the card to
+            # POS_FACEUP_ATTACK -- a Flip Summon always ends there, by rule
+            # -- so this doubles as the position update. Without this, the
+            # client had no way to learn a set monster just turned face-up
+            # at all: unlike a manual Change Position, a flip summon never
+            # sends a separate MSG_POS_CHANGE, and flipsummoning/flipsummoned
+            # carry no location/position of their own (reproduced live: the
+            # card visually stayed face-down after being flip summoned,
+            # even though its effect had already resolved).
+            location = describe_location(stream.u32())
             yield {"type": "event", "event": "flipsummoning", "card": card_brief(code)}
+            yield {"type": "event", "event": "pos_change", "card": card_brief(code),
+                   "location": {"controller": location["controller"], "location_id": location["location_id"],
+                                 "sequence": location["sequence"]},
+                   "position": location["position"]}
 
         elif msg == MSG_FLIPSUMMONED:
             yield {"type": "event", "event": "flipsummoned"}

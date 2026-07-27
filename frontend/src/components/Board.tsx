@@ -260,7 +260,14 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     const label = { deck: "DECK", extra: "ED", gy: "GY", banished: "BANISH" }[kind];
 
     if (kind === "deck" || kind === "extra") {
-      const pile = kind === "deck" ? board.deck[controller] : board.extra[controller];
+      // debugOpponentDeck (local puzzle-authoring only -- see
+      // boardState.ts) stands in for the opponent's own deck[1] (normally
+      // just a count) when present, so the pile becomes real, browsable
+      // ZoneCard[] data the same way the player's own already is. Never
+      // touches the Extra Deck or the player's own side.
+      const pile = kind === "deck"
+        ? (controller === 1 && board.debugOpponentDeck ? board.debugOpponentDeck : board.deck[controller])
+        : board.extra[controller];
       const count = typeof pile === "number" ? pile : pile.length;
       const cards = typeof pile === "number" ? undefined : pile;
       const openLabel = kind === "deck" ? "Deck" : "Extra Deck";

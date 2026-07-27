@@ -43,6 +43,13 @@ export interface BoardState {
   extra: { 0: ZoneCard[]; 1: number };
   gy: { 0: ZoneCard[]; 1: ZoneCard[] };
   banished: { 0: ZoneCard[]; 1: ZoneCard[] };
+  // Local puzzle-authoring aid only (see duel_engine.py's
+  // REVEAL_OPPONENT_DECK) -- undefined on a normal connection, where
+  // deck[1] stays a plain count and the pile stays unclickable. When
+  // present, Board.tsx uses it (not deck[1]) as the opponent Deck pile's
+  // real, browsable contents, kept in sync by the same draw-event handling
+  // player 0's own deck already gets.
+  debugOpponentDeck?: ZoneCard[];
   status: "playing" | "win" | "loss" | "ended";
   statusMessage: string;
   // Author-provided display title from the puzzle file's optional "title"
@@ -289,7 +296,8 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       }
       b.zones = zones;
       b.hand = { 0: item.player_hand as CardRef[], 1: (item.opponent_hand ?? []) as CardRef[] };
-      b.deck = { 0: item.player_deck as CardRef[], 1: 0 };
+      b.deck = { 0: item.player_deck as CardRef[], 1: (item.opponent_deck_count as number | undefined) ?? 0 };
+      b.debugOpponentDeck = item.opponent_deck as ZoneCard[] | undefined;
       b.extra = { 0: item.player_extra as CardRef[], 1: (item.opponent_extra_count as number | undefined) ?? 0 };
       b.banished = { 0: (item.player_banished ?? []) as CardRef[], 1: [] };
       b.gy = { 0: (item.player_graveyard ?? []) as CardRef[], 1: (item.opponent_graveyard ?? []) as CardRef[] };
@@ -370,7 +378,33 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
           deck: { ...board.deck, 0: deck0 },
         };
       }
-      return board;
+      // The opponent's deck[1] is normally only ever a count (real contents
+      // deliberately stay hidden -- see board_state's opponent_deck_count),
+      // so unlike player 0's branch above there's no per-card removeByCode
+      // to do to it, just decrementing the number. debugOpponentDeck (only
+      // present at all with REVEAL_OPPONENT_DECK on) is the one exception --
+      // when it exists it needs the exact same per-card removal deck[0]
+      // gets, or the pile it backs would silently stop matching what's
+      // actually left to draw. Player 1's hand *is* real ZoneCard[] data
+      // (opponent_hand entries are known puzzle-authored cards, same as
+      // opponent_field) -- CardTile just renders it as a face-down count,
+      // same as every other opponent-hand card already does, so appending
+      // here doesn't leak anything the UI wasn't already choosing not to
+      // show. This case was previously a no-op, which silently dropped
+      // every opponent draw -- reproduced live via Hand Destruction ("Each
+      // player discards 2, then draws 2"): the opponent's discard correctly
+      // shrank their hand count, but the draw half never landed, so their
+      // hand count only ever went down.
+      let debugDeck1 = board.debugOpponentDeck;
+      if (debugDeck1) {
+        for (const card of cards) debugDeck1 = removeByCode(debugDeck1, card.code);
+      }
+      return {
+        ...board,
+        hand: { ...board.hand, 1: [...board.hand[1], ...cards] },
+        deck: { ...board.deck, 1: Math.max(0, board.deck[1] - cards.length) },
+        debugOpponentDeck: debugDeck1,
+      };
     }
 
     case "stats_update": {

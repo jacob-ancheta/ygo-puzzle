@@ -19,3 +19,12 @@ SCRIPTS_DIR = r"C:\path\to\ygopro-scripts"
 # never touches the real leaderboard (server.py's is_current_puzzle check is
 # separate and unaffected by this).
 # ALLOW_FUTURE_PUZZLES = True
+
+# Optional. Uncomment to let your LOCAL backend send the opponent's real
+# Deck contents to the client (still only a count in production/on Render --
+# see duel_engine.py's initial_board_state), so the opponent's Deck pile
+# becomes clickable/browsable during authoring the same way the player's own
+# already is. Purely a puzzle-authoring convenience for checking draw order
+# -- never reveals anything to a real player, since this file doesn't exist
+# outside your own machine.
+# REVEAL_OPPONENT_DECK = True

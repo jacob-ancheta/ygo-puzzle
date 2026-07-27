@@ -22,6 +22,19 @@ import { API_URL, WS_URL } from "./config";
 import { msUntilNextRotation } from "./resetTime";
 import type { CardRef, IdleBattleOption } from "./protocol";
 
+const TYPE_MONSTER = 0x1;
+
+// A set Spell/Trap's *own* position (FACEDOWN_ATTACK/FACEDOWN_DEFENSE bits,
+// per the engine's Spell/Trap-zone convention -- see boardState.ts) --
+// distinguishes it from a face-down Set Monster, which already gets its own
+// "always show the menu" treatment via Change Position and shouldn't also
+// match this.
+function isFaceDownSpellTrap(card: CardRef | undefined): boolean {
+  if (!card || card.type === undefined || card.type & TYPE_MONSTER) return false;
+  const position = (card as ZoneCard).position;
+  return position !== undefined && Boolean((position & POS.FACEDOWN_ATTACK) || (position & POS.FACEDOWN_DEFENSE));
+}
+
 const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place", "chain"]);
 const MULTI_SELECT_PROMPTS = new Set(["card", "tribute", "sum"]);
 // "shuffle_hand" is a real idlecmd option the engine can offer, but this
@@ -560,8 +573,18 @@ export default function App() {
     // completely different from every other Spell/Trap in hand, for a
     // purely incidental reason -- its Activate wasn't legal yet, not
     // because Set/Activate menus don't apply to it).
+    // A set Spell/Trap's only legal idle option is "Activate" (it can't be
+    // re-Set), so this single-option shortcut always skipped straight past
+    // the menu into needsConfirm's Yes/No modal -- reproduced live, it read
+    // as though clicking a facedown card had no Cancel step at all (the
+    // modal's "No" button is one, but nothing about it signals that the way
+    // an explicit Activate/Cancel menu does). Every other single-option
+    // card here really is a one-shot ignition effect with nothing to pick
+    // between; a facedown Spell/Trap is the one case where skipping the
+    // menu hides a real, expected click-through step.
     const alwaysShowsMenu = options[0].option.action === "Change Position"
-      || options[0].option.action === "Set Spell/Trap";
+      || options[0].option.action === "Set Spell/Trap"
+      || (isFaceDownSpellTrap(card) && options[0].option.action === "Activate");
     if (options.length === 1 && !hasMaterials && !alwaysShowsMenu) {
       dispatchIdleChoice(card, options[0].option, options[0].idx);
       return;
@@ -946,8 +969,11 @@ export default function App() {
             })),
             // Change Position never auto-commits (see handleCardMenu) and is
             // once per turn, so its menu gets an explicit way to back out --
-            // clicking anywhere outside still closes it too.
+            // clicking anywhere outside still closes it too. Same reasoning
+            // for a face-down Spell/Trap's lone "Activate" -- see
+            // isFaceDownSpellTrap.
             ...(menu.options.some(({ option }) => option.action === "Change Position")
+              || isFaceDownSpellTrap(menu.card)
               ? [{ key: "cancel", label: "Cancel", onClick: () => setMenu(null) }]
               : []),
           ]}
