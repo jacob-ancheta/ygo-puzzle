@@ -2,7 +2,7 @@
 
 **A daily Yu-Gi-Oh! dueling puzzle, in the spirit of Wordle.**
 
-Every day brings a new pre-set duel: a fixed board, a fixed hand, and one real solution. Find the exact sequence of plays that wins the duel under the real rules, against an opponent AI.
+Every day brings a new pre-set duel: a fixed board, a fixed hand, and a real solution. Find the exact sequence of plays that wins the duel under the real rules, against an opponent AI.
 
 **Play it now: [duelpuzzdle.xyz](https://duelpuzzdle.xyz)**
 
