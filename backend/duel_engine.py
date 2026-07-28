@@ -973,15 +973,28 @@ def run(engine):
 
         if msg == MSG_NEW_TURN:
             player = stream.u8()
+            # Declared here, not the instant PHASE_END begins (see below) --
+            # every puzzle up to this one only ever needed the win condition
+            # met by the end of the Battle Phase, so firing the loss right
+            # as End Phase started looked equivalent to "the turn is over"
+            # and nobody noticed the difference. It isn't: End Phase has its
+            # own real message traffic -- delayed draw effects (Super
+            # Rejuvenation), "would you like to revive/negate" prompts, even
+            # a late MSG_WIN -- and returning immediately cut all of that off
+            # before the engine ever got to send it. Reproduced live: a
+            # combo whose win condition only resolves during End Phase
+            # instant-lost the moment that phase began. The opponent's own
+            # turn actually starting is the real "nothing else can happen"
+            # signal -- by then End Phase has unavoidably finished running.
+            if current_turn_player == 0 and player == 1:
+                yield {"type": "event", "event": "loss", "message": "Your turn ended without winning."}
+                return
             current_turn_player = player
             yield {"type": "event", "event": "new_turn", "player": player}
 
         elif msg == MSG_NEW_PHASE:
             phase = stream.u16()
             yield {"type": "event", "event": "new_phase", "phase": PHASE_NAMES.get(phase, hex(phase))}
-            if phase == PHASE_END and current_turn_player == 0:
-                yield {"type": "event", "event": "loss", "message": "Your turn ended without winning."}
-                return
 
         elif msg == MSG_HINT:
             stream.u8(); stream.u8(); stream.u32()  # UI-only, nothing to act on
