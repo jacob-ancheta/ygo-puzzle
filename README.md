@@ -12,7 +12,7 @@ Every day brings a new pre-set duel: a fixed board, a fixed hand, and a real sol
 
 ## How it works
 
-- **A real duel engine, not a simulation of one.** The backend embeds [ygopro-core](https://github.com/Fluorohydride/ygopro-core) (the open-source C++ engine used by real Yu-Gi-Oh duel simulators) together with the official [ygopro-scripts](https://github.com/Fluorohydride/ygopro-scripts) card scripts, driven live over a WebSocket. Every card behaves exactly as it does in the game: full chains, quick effects, negation windows, etc.
+- **YGOPro-core duel engine.** The backend embeds [ygopro-core](https://github.com/Fluorohydride/ygopro-core) (the open-source C++ engine used by real Yu-Gi-Oh duel simulators) together with the official [ygopro-scripts](https://github.com/Fluorohydride/ygopro-scripts) card scripts, driven live over a WebSocket. Every card behaves exactly as it does in the game: full chains, quick effects, negation windows, etc.
 - **One new puzzle a day**, rotating at 4pm EST, everyone gets the same board on the same day.
 - **Leaderboard** for today's puzzle, with optional sign-in to track your record. You get to show off all your medals each time you hit the leaderboard!
 - **Playable on desktop and mobile.**
