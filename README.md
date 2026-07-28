@@ -33,7 +33,7 @@ Each day's puzzle is authored as a simple Python file describing the board: what
 
 ## Deploying
 
-Puzzle content (`backend/puzzles/`) lives in a separate *private* repo, not this one — this repo is public, and future/unplayed puzzles committed here would be readable by anyone before they go live. The Dockerfile clones them in at build time using a Render [Secret File](https://render.com/docs/docker-secrets) named `puzzles_repo_token` (a GitHub token with read access to that private repo), so that build step will fail until that secret is configured on the Render service.
+Puzzle content (`backend/puzzles/`) lives in a separate *private* repo, (not this one), and future/unplayed puzzles committed here would be readable by anyone before they go live. The Dockerfile clones them in at build time using a Render [Secret File](https://render.com/docs/docker-secrets), so that build step will fail until that secret is configured on the Render service.
 
 ## Acknowledgments
 
