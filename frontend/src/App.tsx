@@ -36,6 +36,27 @@ function isFaceDownSpellTrap(card: CardRef | undefined): boolean {
   return position !== undefined && Boolean((position & POS.FACEDOWN_ATTACK) || (position & POS.FACEDOWN_DEFENSE));
 }
 
+// Field-zone idle options aren't deduped by category (see
+// idleBattleOptionsFor's docstring) -- a card that registers more than one
+// independently-activatable ignition effect (e.g. Ancient City - Rainbow
+// Ruins) legitimately offers 2+ separate "Activate" entries for the exact
+// same card/location. Grouping by action here is what lets the menu show
+// one "Activate" button (opening a follow-up picker) instead of N
+// identically-labeled ones. Hand-card options are already deduped
+// server-adjacent (idleBattleOptionsFor's own dedupeByCategory), so this is
+// a no-op there -- every group ends up size 1.
+function groupMenuOptions(options: { option: IdleBattleOption; idx: number }[]) {
+  const order: string[] = [];
+  const groups = new Map<string, { option: IdleBattleOption; idx: number }[]>();
+  for (const entry of options) {
+    const key = entry.option.action;
+    let list = groups.get(key);
+    if (!list) { list = []; groups.set(key, list); order.push(key); }
+    list.push(entry);
+  }
+  return order.map((action) => ({ action, entries: groups.get(action) as { option: IdleBattleOption; idx: number }[] }));
+}
+
 const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place", "chain"]);
 const MULTI_SELECT_PROMPTS = new Set(["card", "tribute", "sum"]);
 // "shuffle_hand" is a real idlecmd option the engine can offer, but this
@@ -320,6 +341,13 @@ export default function App() {
   }, [board.status]);
 
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // A field card can register more than one independently-activatable
+  // ignition effect (e.g. Ancient City - Rainbow Ruins: Special Summon a
+  // Crystal Beast, or draw a card) -- idlecmd offers each as its own
+  // "Activate" entry with the same card/location, which ActionMenu collapses
+  // into a single "Activate" button (see menuGroups below); clicking it opens
+  // this follow-up picker instead of dispatching straight to the server.
+  const [effectPicker, setEffectPicker] = useState<{ card: CardRef; items: { option: IdleBattleOption; idx: number }[] } | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmState | null>(null);
   const [selection, setSelection] = useState<number[]>([]);
   const [detailCard, setDetailCard] = useState<CardRef | null>(null);
@@ -398,6 +426,7 @@ export default function App() {
 
   useEffect(() => {
     setMenu(null);
+    setEffectPicker(null);
     setConfirmAction(null);
     setSelection([]);
     setPendingFinalChoice(null);
@@ -966,33 +995,69 @@ export default function App() {
                   },
                 }]
               : []),
-            ...menu.options.map(({ option, idx }) => ({
-              key: idx,
-              label: option.action === "Change Position"
-                ? repositionLabel(menu.card)
-                : idleOptionLabel(option),
-              onClick: () => {
-                const c = option.card ?? menu.card;
-                // Card-less options (battle_phase/end_phase from the phase
-                // menu) go straight to the server -- they have no placement
-                // or confirm step to dispatch through.
-                if (c) dispatchIdleChoice(c, option, idx);
-                else respond({ choice: idx });
-                setMenu(null);
-              },
-            })),
+            ...groupMenuOptions(menu.options).map(({ action, entries }) => {
+              // A lone entry for this action dispatches straight through, as
+              // before. 2+ entries sharing one action (e.g. Ancient City -
+              // Rainbow Ruins' 2 separate "Activate" ignition effects) means
+              // the field genuinely can't distinguish them without a
+              // follow-up picker -- collapse to one button that opens it.
+              if (entries.length > 1 && menu.card) {
+                const card = menu.card;
+                return {
+                  key: action,
+                  label: idleOptionLabel(entries[0].option),
+                  onClick: () => {
+                    setEffectPicker({ card, items: entries });
+                    setMenu(null);
+                  },
+                };
+              }
+              const { option, idx } = entries[0];
+              return {
+                key: idx,
+                label: option.action === "Change Position"
+                  ? repositionLabel(menu.card)
+                  : idleOptionLabel(option),
+                onClick: () => {
+                  const c = option.card ?? menu.card;
+                  // Card-less options (battle_phase/end_phase from the phase
+                  // menu) go straight to the server -- they have no placement
+                  // or confirm step to dispatch through.
+                  if (c) dispatchIdleChoice(c, option, idx);
+                  else respond({ choice: idx });
+                  setMenu(null);
+                },
+              };
+            }),
             // Change Position never auto-commits (see handleCardMenu) and is
             // once per turn, so its menu gets an explicit way to back out --
             // clicking anywhere outside still closes it too. Same reasoning
-            // for a face-down Spell/Trap's lone "Activate" -- see
-            // isFaceDownSpellTrap.
+            // for a face-down Spell/Trap's lone "Activate", and for a
+            // grouped multi-effect "Activate" that opens the picker below --
+            // see isFaceDownSpellTrap.
             ...(menu.options.some(({ option }) => option.action === "Change Position")
               || isFaceDownSpellTrap(menu.card)
+              || groupMenuOptions(menu.options).some((g) => g.entries.length > 1)
               ? [{ key: "cancel", label: "Cancel", onClick: () => setMenu(null) }]
               : []),
           ]}
           disableOutsideClose={confirmAction !== null}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {effectPicker && (
+        <PromptOverlay
+          prompt={{
+            prompt: "option",
+            options: effectPicker.items.map(({ option }) => option.desc ?? 0),
+            card: effectPicker.card,
+          }}
+          respond={(response) => {
+            const { option, idx } = effectPicker.items[response.choice as number];
+            dispatchIdleChoice(option.card ?? effectPicker.card, option, idx);
+            setEffectPicker(null);
+          }}
         />
       )}
 

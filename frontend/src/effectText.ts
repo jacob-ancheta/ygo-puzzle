@@ -130,6 +130,16 @@ export function optionBullets(desc: string | undefined): string[] {
 // one only if the same "partial-only" situation gets reported again.
 const learnedBaseOffset = new Map<number, number>([
   [40044918, 1], // Elemental HERO Stratos -- offset 0 is its own trigger description, not a bullet
+  // Ancient City - Rainbow Ruins (c34487429.lua): only ever offers 2 of its
+  // 5 bullets as idlecmd "Activate" options -- the "draw" ignition effect
+  // (Stringid offset 2) and the "Special Summon a Crystal Beast" ignition
+  // effect (offset 3) -- a full offer (which would auto-learn the base) can
+  // never happen, since the other 3 bullets are a passive indestructible
+  // effect (no Stringid of its own at all) and 2 quick-effect/replacement
+  // effects that never appear in idlecmd. Confirmed against the script:
+  // offset 2 -> bullet index 3 ("4+: draw"), offset 3 -> bullet index 4
+  // ("5: Special Summon that target") -- base -1 lands both.
+  [34487429, -1],
 ]);
 
 /**

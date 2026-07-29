@@ -602,6 +602,7 @@ function ZoneCardSlot({
     <CardTile
       card={card}
       position={card.position}
+      inMonsterZone={loc.location_id === LOC.MZONE}
       actionable={actionable}
       selectable={selectable}
       selected={selected}

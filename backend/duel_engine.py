@@ -1486,8 +1486,19 @@ def run(engine):
             for _ in range(n_activate):
                 code = stream.u32() & 0x7fffffff
                 controller = stream.u8(); location = stream.u8(); sequence = stream.u8()
-                stream.u32()
-                activate_items.append((code, controller, location, sequence))
+                # peffect->description (playerop.cpp's select_idle_command) --
+                # previously read and discarded. A card can register more than
+                # one independently-activatable ignition effect (e.g. Ancient
+                # City - Rainbow Ruins' Special-Summon-a-Crystal-Beast and its
+                # separate draw effect), each its own "Activate" entry here
+                # with the *same* code/location -- with no desc, the frontend
+                # had no way to tell them apart, so both rendered as identical
+                # "Activate Effect" buttons (reported live: 2 indistinguishable
+                # Activate options for the same field card). Threaded through
+                # below so the client can label/group them, same as the desc
+                # already carried by MSG_SELECT_OPTION.
+                desc = stream.u32()
+                activate_items.append((code, controller, location, sequence, desc))
             categories.append(activate_items)
             to_bp = stream.u8()
             to_ep = stream.u8()
@@ -1495,16 +1506,24 @@ def run(engine):
 
             options = []
             for cat_i, label in enumerate(IDLE_ACTION_NAMES[:6]):
-                for item_i, (code, controller, location, sequence) in enumerate(categories[cat_i] if cat_i < 6 else []):
+                for item_i, item in enumerate(categories[cat_i] if cat_i < 6 else []):
+                    if cat_i == 5:
+                        code, controller, location, sequence, desc = item
+                    else:
+                        code, controller, location, sequence = item
+                        desc = None
                     # Distinguishes multiple copies of the same card (e.g. 2
                     # in hand) -- without this, the frontend can only filter
                     # idle options by card code, so clicking either copy
                     # would surface *both* copies' Summon/Set entries at
                     # once (see interaction.ts's idleBattleOptionsFor).
-                    options.append({"category": cat_i, "index": item_i, "action": label,
-                                     "card": card_brief(code),
-                                     "location": {"controller": controller, "location_id": location,
-                                                  "sequence": sequence}})
+                    opt = {"category": cat_i, "index": item_i, "action": label,
+                           "card": card_brief(code),
+                           "location": {"controller": controller, "location_id": location,
+                                        "sequence": sequence}}
+                    if desc is not None:
+                        opt["desc"] = desc
+                    options.append(opt)
             if to_bp:
                 options.append({"category": 6, "index": 0, "action": "battle_phase"})
             if to_ep:

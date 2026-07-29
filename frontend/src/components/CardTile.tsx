@@ -33,9 +33,21 @@ interface Props {
   /** Chain link number to flash on top of the card while `enlarged` -- makes
    * it obvious which link in the chain is currently resolving. */
   chainLinkBadge?: number;
+  /** Whether this card sits in a Monster Zone right now -- defaults to true
+   * since every existing caller either renders a Monster Zone card or never
+   * passes `position` at all (making the defense check below inert either
+   * way). Set to false for a Monster Zone-only card rendered elsewhere, e.g.
+   * a Crystal Beast monster sitting in the Spell/Trap Zone (that archetype's
+   * own mechanic): duel_engine.py places Spell/Trap-zone cards with the
+   * combined face-up/face-down bits (matching the real Debug.AddCard
+   * convention), which satisfied this component's old orientation check
+   * for ANY monster-type card there regardless of zone -- reproduced live
+   * as a Spell/Trap-zone Crystal Beast rendering sideways like a Defense
+   * Position monster. Orientation is a Monster Zone concept only. */
+  inMonsterZone?: boolean;
 }
 
-export default function CardTile({ card, position, selectable, selected, actionable, faceDownHint, onClick, small, showStats, enlarged, chainLinkBadge }: Props) {
+export default function CardTile({ card, position, selectable, selected, actionable, faceDownHint, onClick, small, showStats, enlarged, chainLinkBadge, inMonsterZone = true }: Props) {
   const [imageFailed, setImageFailed] = useState(false);
 
   if (!card) return <div className="card-slot empty" />;
@@ -43,9 +55,10 @@ export default function CardTile({ card, position, selectable, selected, actiona
   const faceDown = faceDownHint || (position !== undefined && (position & POS.FACEDOWN_ATTACK || position & POS.FACEDOWN_DEFENSE));
   // Only monsters have an attack/defense orientation -- a set Spell/Trap
   // still carries the FACEDOWN_DEFENSE bit from the engine, but it should
-  // never be rotated like a set monster.
+  // never be rotated like a set monster. Same reasoning for `inMonsterZone`
+  // -- see its doc comment above.
   const isMonster = Boolean(card.type !== undefined && card.type & TYPE_MONSTER);
-  const defense = isMonster && position !== undefined && (position & POS.FACEUP_DEFENSE || position & POS.FACEDOWN_DEFENSE);
+  const defense = inMonsterZone && isMonster && position !== undefined && (position & POS.FACEUP_DEFENSE || position & POS.FACEDOWN_DEFENSE);
 
   const classes = [
     "card-slot",
