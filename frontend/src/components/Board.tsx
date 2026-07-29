@@ -127,6 +127,19 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   const [enlargedPile, setEnlargedPile] = useState<{ controller: number; locationId: number } | null>(null);
   const [enlargedPileCard, setEnlargedPileCard] = useState<CardRef | null>(null);
   const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // While the "which zone?" step for a just-chosen Summon/Set is still a
+  // pure client-side guess (pendingPlacement, set by App.tsx's
+  // startPlacement -- nothing has been sent to the server yet), `prompt` is
+  // still whatever was legal *before* this Summon/Set was picked (almost
+  // always "idlecmd"). Every OTHER card's actionable/selectable state is
+  // computed from that prompt, so without this it stays live during the
+  // guess window -- reported live as being able to Activate a Set Enemy
+  // Controller while still deciding where to place a Tribute Summon.
+  // Zone-slot selection for the guess itself is driven by
+  // pendingPlacement/`guessed` directly, not `prompt`, so nulling it here
+  // only removes that stale leftover affordance, never the guess UI.
+  const fieldPrompt = pendingPlacement ? null : prompt;
   useEffect(() => {
     const loc = board.currentChainLocation;
     if (!loc || loc.controller !== 1) return;
@@ -168,7 +181,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     const card = board.zones[zoneKey(controller, locationId, sequence)];
 
     if (!card) {
-      const zoneIdx = matchZoneIndex(prompt, loc);
+      const zoneIdx = matchZoneIndex(fieldPrompt, loc);
       const guessed = pendingPlacement !== null && controller === 0
         && locationId === pendingPlacement.locationId
         && pendingPlacement.openSequences.includes(sequence);
@@ -194,7 +207,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         key={sequence}
         card={card}
         loc={loc}
-        prompt={prompt}
+        prompt={fieldPrompt}
         selection={selection}
         onCardMenu={onCardMenu}
         onSelectToggle={onSelectToggle}
@@ -219,8 +232,8 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     const card = cardOwn ?? cardOpp;
 
     if (!card) {
-      const idxOwn = matchZoneIndex(prompt, { controller: 0, location_id: LOC.MZONE, sequence });
-      const idxOpp = matchZoneIndex(prompt, { controller: 1, location_id: LOC.MZONE, sequence });
+      const idxOwn = matchZoneIndex(fieldPrompt, { controller: 0, location_id: LOC.MZONE, sequence });
+      const idxOpp = matchZoneIndex(fieldPrompt, { controller: 1, location_id: LOC.MZONE, sequence });
       const zoneIdx = idxOwn ?? idxOpp;
       const selectable = zoneIdx !== null;
       const selected = selectable && selection.includes(zoneIdx as number);
@@ -239,7 +252,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
         key={sequence}
         card={card}
         loc={loc}
-        prompt={prompt}
+        prompt={fieldPrompt}
         selection={selection}
         onCardMenu={onCardMenu}
         onSelectToggle={onSelectToggle}
@@ -299,7 +312,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       // the "something's playable" cue the actionable glow already gives
       // field/hand cards elsewhere. Never the opponent's: their legal plays
       // aren't the player's to see coming.
-      const extraActionable = kind === "extra" && controller === 0 && isPileActionable(prompt, 0, LOC.EXTRA);
+      const extraActionable = kind === "extra" && controller === 0 && isPileActionable(fieldPrompt, 0, LOC.EXTRA);
       return (
         <PileCell
           key={`${kind}-${controller}`}
@@ -330,7 +343,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
     // card (e.g. Kuribohrn's own reactive effect) makes the pile glow;
     // Banished never does (nothing in this app's card pool activates from
     // there), and the opponent's GY never does regardless.
-    const gyActionable = kind === "gy" && controller === 0 && isPileActionable(prompt, 0, LOC.GY);
+    const gyActionable = kind === "gy" && controller === 0 && isPileActionable(fieldPrompt, 0, LOC.GY);
     return (
       <PileCell
         key={`${kind}-${controller}`}
@@ -468,7 +481,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
                   key={`${card.code}-${i}`}
                   card={card}
                   loc={loc}
-                  prompt={prompt}
+                  prompt={fieldPrompt}
                   selection={selection}
                   onCardMenu={onCardMenu}
                   onSelectToggle={onSelectToggle}
@@ -485,7 +498,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
           <PileViewOverlay
             label={pileView.label}
             cards={pileView.cards}
-            prompt={prompt}
+            prompt={fieldPrompt}
             locFor={pileView.locFor}
             onCardDetail={onCardDetail}
             onCardMenu={onCardMenu}

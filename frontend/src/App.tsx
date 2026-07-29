@@ -17,6 +17,7 @@ import LossModal from "./components/LossModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { USERNAME_QUERY_PARAM } from "./components/SignInForm";
 import { idleOptionLabel, nonCardOptions } from "./interaction";
+import { selectCardText } from "./effectText";
 import { LOC, POS, TYPE_FIELD, guessOpenZones, type BoardState, type ZoneCard } from "./boardState";
 import { API_URL, WS_URL } from "./config";
 import { msUntilNextRotation } from "./resetTime";
@@ -695,6 +696,17 @@ export default function App() {
   const sumLabel = requiredSumMaterials.length
     ? `Select materials totaling ${effectivePrompt?.target} (already selected: ${requiredSumMaterials.map((card) => card.name).join(", ")})`
     : `Select materials totaling ${effectivePrompt?.target}`;
+  // Card-select prompts ("card"/"tribute"/"select_unselect") carry no
+  // effect text of their own -- see effectText.ts's SELECT_CARD_TEXT -- so
+  // a card with an otherwise-ambiguous selection (e.g. Riryoku: which of
+  // these 2 targets is the one that gets halved?) gets a curated
+  // label/note instead of the generic "Select card for X". Riryoku's own
+  // targeting specifically comes through as "select_unselect" (its 2-of-N
+  // SelectSubGroup allows toggling between combinations), not a plain
+  // "card" prompt.
+  const curatedSelect = (effectivePromptKind === "card" || effectivePromptKind === "tribute" || effectivePromptKind === "select_unselect")
+    ? selectCardText((effectivePrompt?.source as CardRef | undefined)?.code, effectivePrompt)
+    : null;
 
   // What the *board* actually renders: while an opponent-activation notice
   // is up, freeze on that notice's own snapshot (see chainNotices in
@@ -909,19 +921,20 @@ export default function App() {
 
       {isMultiSelect && effectivePrompt && !pileView && (
         <SelectionBar
-          label={effectivePromptKind === "sum" ? sumLabel : `Select ${effectivePromptKind}${forWhom}`}
+          label={curatedSelect?.label ?? (effectivePromptKind === "sum" ? sumLabel : `Select ${effectivePromptKind}${forWhom}`)}
           count={selection.length}
           min={effectivePrompt.min as number}
           max={effectivePrompt.max as number}
           canConfirm={selection.length >= (effectivePrompt.min as number) && selection.length <= (effectivePrompt.max as number)}
           onConfirm={() => respond({ indices: selection })}
           rejected={retried}
+          note={curatedSelect?.note}
         />
       )}
 
       {effectivePromptKind === "select_unselect" && effectivePrompt && !pileView && (
         <SelectionBar
-          label={`Select/unselect cards${forWhom}`}
+          label={curatedSelect?.label ?? `Select/unselect cards${forWhom}`}
           count={
             (effectivePrompt.items as { already_selected?: boolean }[]).filter((i) => i.already_selected).length +
             (pendingFinalChoice !== null ? 1 : 0)
@@ -934,6 +947,7 @@ export default function App() {
           finishLabel={pendingFinalChoice !== null ? "Cancel" : "Finish"}
           onFinish={() => { respond({ finish: true }); setPendingFinalChoice(null); }}
           rejected={retried}
+          note={curatedSelect?.note}
         />
       )}
 

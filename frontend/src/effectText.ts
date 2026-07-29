@@ -42,6 +42,50 @@ export function yesNoText(cardCode: number | undefined, desc: number | undefined
   return YESNO_TEXT[`${cardCode}:${desc}`] ?? null;
 }
 
+// Curated text for MSG_SELECT_CARD/MSG_SELECT_TRIBUTE ("card"/"tribute")
+// selection prompts, keyed by the resolving card's code -- same motivation
+// as YESNO_TEXT above (the engine exposes no per-effect description here
+// either), but keyed off the shape of the prompt itself rather than a desc
+// id: a single activation can walk the player through more than one
+// selection step with no separate desc to tell them apart by (Riryoku:
+// pick 2 targets, then pick which of those 2 gets halved -- both are just
+// "card" prompts for card 34016756 as far as the wire protocol is concerned).
+export interface SelectCardText {
+  label?: string;
+  note?: string;
+}
+
+const SELECT_CARD_TEXT: Record<number, (prompt: { max?: number; items?: unknown[] }) => SelectCardText | null> = {
+  // Riryoku (c34016756.lua): first targets 2 face-up monsters anywhere on
+  // the field (either side, any combination) -- then, from those same 2,
+  // asks which one becomes the "reference" card: that one's ATK is halved,
+  // and the other one's ATK increases by that same halved amount. Told
+  // apart purely by candidate-pool size, since nothing else distinguishes
+  // the two steps.
+  34016756: (prompt) => {
+    const items = (prompt.items as unknown[] | undefined) ?? [];
+    if (prompt.max === 1 && items.length === 2) {
+      return {
+        label: "Select the monster to HALVE",
+        note: "The other targeted monster gains ATK equal to that same halved amount.",
+      };
+    }
+    if (prompt.max === 2) {
+      return {
+        label: "Target 2 face-up monsters (either side)",
+        note: "You'll choose next which of the two gets halved.",
+      };
+    }
+    return null;
+  },
+};
+
+export function selectCardText(cardCode: number | undefined, prompt: Record<string, unknown> | null): SelectCardText | null {
+  if (cardCode === undefined || !prompt) return null;
+  const fn = SELECT_CARD_TEXT[cardCode];
+  return fn ? fn(prompt) : null;
+}
+
 // Text for MSG_SELECT_OPTION ("activate 1 of these effects") prompts,
 // parsed straight from the resolving card's own `desc` -- unlike
 // YESNO_TEXT above, this needs no per-card entry: cards.db already formats

@@ -9,12 +9,14 @@ interface Props {
   onFinish?: () => void;
   finishLabel?: string;
   rejected?: boolean;
+  note?: string;
 }
 
-export default function SelectionBar({ label, count, min, max, canConfirm, onConfirm, canFinish, onFinish, finishLabel, rejected }: Props) {
+export default function SelectionBar({ label, count, min, max, canConfirm, onConfirm, canFinish, onFinish, finishLabel, rejected, note }: Props) {
   return (
     <div className="selection-bar">
       <span>{label} &mdash; selected {count} (need {min}{max !== min ? `-${max}` : ""})</span>
+      {note && <span className="selection-bar-note">{note}</span>}
       {rejected && (
         <span className="selection-bar-error">That selection wasn't accepted -- pick a different combination.</span>
       )}

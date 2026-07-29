@@ -884,6 +884,7 @@
 .selection-bar-actions { display: flex; gap: 8px; }
 
 .selection-bar-error { color: var(--danger, #e05555); font-size: 12px; }
+.selection-bar-note { color: var(--ink-300); font-size: 12px; }
 
 /* ---------- side controls (priority toggle + restart) ---------- */
 
