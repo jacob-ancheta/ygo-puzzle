@@ -510,7 +510,7 @@
   height: 100%;
   border-radius: 4px;
   position: relative;
-  background: linear-gradient(160deg, var(--ink-700), var(--ink-800));
+  background: linear-gradient(160deg, #8a6f4e, #5f4c33);
 }
 
 .card-back::after {

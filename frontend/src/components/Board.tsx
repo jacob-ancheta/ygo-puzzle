@@ -101,10 +101,11 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   }, [prompt]);
 
   // Brief scale-up pulse (with the chain link number flashed on top) on
-  // whichever card the opponent just activated -- see App.css's
-  // .card-tile.enlarged / .chain-link-badge. Only the opponent's own
-  // activations get this treatment; the player already gets plenty of
-  // feedback (menus, confirm modals) for their own actions.
+  // whichever card is currently chaining -- see App.css's .card-tile.enlarged
+  // / .chain-link-badge. Fires for either side: the player's own manual
+  // activations and mandatory/triggered effects (e.g. Dandylion's forced
+  // Special Summon) get the same cue as an opponent's, rather than only the
+  // opponent's own activations getting any flash at all.
   const [enlargedKey, setEnlargedKey] = useState<string | null>(null);
   const [enlargedChainLink, setEnlargedChainLink] = useState<number | null>(null);
   // An opponent *hand* activation (a hand trap like Maxx "C") has no board
@@ -140,22 +141,43 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   // pendingPlacement/`guessed` directly, not `prompt`, so nulling it here
   // only removes that stale leftover affordance, never the guess UI.
   const fieldPrompt = pendingPlacement ? null : prompt;
+  // Off board.chainNotices (an append-only log, one entry per "chaining"
+  // event, either controller -- see boardState.ts), not
+  // board.currentChainLocation directly: that scalar silently missed any
+  // activation that resolved with nothing further to ask (e.g. Allure of
+  // Darkness, Double Summon) -- its own "chaining" and the
+  // immediately-following "chain_end" (which resets the scalar back to
+  // undefined) land in the same React batch, so a scalar-watching effect
+  // only ever observes the post-chain_end state and the flash never shows
+  // at all (reproduced live). Each notice entry's own board snapshot
+  // carries currentChainLocation exactly as it was at that instant, so
+  // reading from there is immune to the same batching.
+  const consumedGlowNoticesRef = useRef(0);
   useEffect(() => {
-    const loc = board.currentChainLocation;
-    if (!loc || loc.controller !== 1) return;
+    const all = board.chainNotices;
+    if (all.length < consumedGlowNoticesRef.current) consumedGlowNoticesRef.current = 0;
+    if (consumedGlowNoticesRef.current >= all.length) return;
+    const fresh = all.slice(consumedGlowNoticesRef.current);
+    consumedGlowNoticesRef.current = all.length;
+    // Only the visible flash matters here, not showing each one in turn
+    // (that's the opponent-notice queue's job, see App.tsx) -- (re)glow
+    // once for whichever of this batch is latest.
+    const notice = fresh[fresh.length - 1];
+    const loc = notice.board.currentChainLocation;
+    if (!loc) return;
     // Cancel-and-restart (rather than a per-effect cleanup keyed on this
     // same dependency) so the glow reliably runs for its full 2s even if
     // the chain fully resolves (chain_end) faster than that -- only a
-    // genuinely new opponent activation, handled here, should cut an
-    // in-flight glow short.
+    // genuinely new activation, handled here, should cut an in-flight glow
+    // short.
     if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
     const key = zoneKey(loc.controller, loc.location_id, loc.sequence);
     setEnlargedKey(key);
-    setEnlargedChainLink(board.currentChainLink ?? null);
-    setEnlargedHandCard(loc.location_id === LOC.HAND ? board.currentChainCard ?? null : null);
+    setEnlargedChainLink(notice.chainLink ?? null);
+    setEnlargedHandCard(loc.location_id === LOC.HAND ? notice.card ?? null : null);
     const isPile = loc.location_id === LOC.GY || loc.location_id === LOC.BANISHED;
     setEnlargedPile(isPile ? { controller: loc.controller, locationId: loc.location_id } : null);
-    setEnlargedPileCard(isPile ? board.currentChainCard ?? null : null);
+    setEnlargedPileCard(isPile ? notice.card ?? null : null);
     glowTimerRef.current = setTimeout(() => {
       setEnlargedKey(null);
       setEnlargedChainLink(null);
@@ -164,8 +186,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       setEnlargedPileCard(null);
       glowTimerRef.current = null;
     }, 2000);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board.currentChainLocation]);
+  }, [board.chainNotices]);
 
   // Only for real unmount, not every board update -- see the note above.
   useEffect(() => {
@@ -476,6 +497,27 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
               // matchCardIndex tell apart multiple copies of the same card
               // instead of every copy resolving to the same prompt index.
               const duplicateRank = handCards.slice(0, i).filter((c) => c.code === card.code).length;
+              // Own hand cards are always face-up already, unlike the
+              // opponent's hidden hand (which swaps to enlargedHandCard just
+              // to reveal it face-up for the glow window) -- so this only
+              // needs to add the pulse/badge to whichever slot matches, not
+              // change what's rendered. Matched by code, first match wins:
+              // hand position is cosmetic only (the engine's own sequence
+              // for a hand card doesn't correspond to display order -- see
+              // matchCardIndex), and identical copies are interchangeable
+              // either way, so which physical copy visually pulses doesn't
+              // matter. Without this, activating a card straight from hand
+              // (e.g. a Quick-Play Spell like Double Summon, never Set)
+              // never got any glow at all -- every other zone already wires
+              // enlarged/chainLinkBadge through, only the player's own hand
+              // row didn't. Gated on enlargedKey's own controller prefix
+              // (zoneKey's format) rather than card identity alone -- the
+              // opponent activating a hand card with the same code as
+              // something the player happens to be holding must not make
+              // the player's own copy pulse.
+              const isEnlargedHand = Boolean(enlargedKey?.startsWith(`0:${LOC.HAND}:`))
+                && enlargedHandCard?.code === card.code
+                && i === handCards.findIndex((c) => c.code === enlargedHandCard.code);
               return (
                 <ZoneCardSlot
                   key={`${card.code}-${i}`}
@@ -489,6 +531,8 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
                   onCardDetail={onCardDetail}
                   pendingFinalChoice={pendingFinalChoice}
                   duplicateRank={duplicateRank}
+                  enlarged={isEnlargedHand}
+                  chainLinkBadge={isEnlargedHand ? (enlargedChainLink ?? undefined) : undefined}
                 />
               );
             })

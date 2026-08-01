@@ -90,17 +90,24 @@ export interface BoardState {
   // The chain link number the currently-chaining card occupies -- flashed on
   // the enlarge cue so it's clear *which* link in the chain is resolving.
   currentChainLink?: number;
-  // Append-only log of every opponent-controlled "chaining" event seen this
-  // duel, in order -- App.tsx's notice queue drains this (tracking how many
-  // it has already consumed) instead of watching currentChainLocation via a
-  // useEffect. Deriving the queue from a *reducer-appended* array rather
-  // than detecting a scalar's transitions is what makes it immune to
-  // multiple WS messages landing in the same React batch: applyEvent runs
-  // once per message regardless of batching, so every entry still lands
-  // here even when several "chaining" events are committed together (e.g.
-  // Futsu reborning Murakumo triggers Murakumo's own "if Special Summoned"
-  // effect on the same tick) -- a watcher keyed on the *current* scalar
-  // would only ever observe the last of those and silently drop the rest.
+  // Append-only log of every "chaining" event seen this duel, either
+  // controller, in order -- App.tsx's opponent-notice queue and player-glow
+  // hold both drain this (each tracking their own consumed count, filtered
+  // to the controller they care about) instead of watching
+  // currentChainLocation via a useEffect. Deriving from a *reducer-appended*
+  // array rather than detecting a scalar's transitions is what makes it
+  // immune to multiple WS messages landing in the same React batch:
+  // applyEvent runs once per message regardless of batching, so every entry
+  // still lands here even when several "chaining" events are committed
+  // together (e.g. Futsu reborning Murakumo triggers Murakumo's own "if
+  // Special Summoned" effect on the same tick, or the player's own card
+  // resolves with no further prompt in between, immediately followed by
+  // "chain_end") -- a watcher keyed on the *current* scalar only ever
+  // observes the last of those and silently drops the rest (reproduced
+  // live: the player's own flash never showed at all for any activation
+  // that needed no follow-up prompt, e.g. Allure of Darkness or Double
+  // Summon, since chain_end's reset landed in the same batch and the
+  // scalar watcher never saw anything in between).
   //
   // Each entry also carries a full board *snapshot*, taken at the instant
   // that card's own "chaining" event fired (its own currentChain* fields
@@ -116,8 +123,10 @@ export interface BoardState {
   // visible board at that link's moment instead, so each notice's glow and
   // popup reflect what the board actually looked like when it fired --
   // the live board only becomes visible again once every notice has been
-  // dismissed.
-  chainNotices: { card: CardRef; chainLink?: number; board: BoardState }[];
+  // dismissed. The player's own glow doesn't need this snapshot trick (no
+  // multi-notice queue to pace through), but reuses the same log for its
+  // reliable-delivery guarantee.
+  chainNotices: { card: CardRef; chainLink?: number; controller: number; board: BoardState }[];
   // The card currently being summoned, between "summoning"/"spsummoning"
   // and the "place" prompt that asks where -- shown alone in the hand row
   // while placement is in progress, whether it actually came from hand or
@@ -442,9 +451,8 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       // chainNotices field comment for why the snapshot exists at all.
       const withChainState: BoardState = { ...board, currentChainCard: card,
         currentChainLocation: location, currentChainLink: chainLink };
-      const chainNotices = location.controller === 1
-        ? [...board.chainNotices, { card, chainLink, board: withChainState }]
-        : board.chainNotices;
+      const chainNotices = [...board.chainNotices,
+        { card, chainLink, controller: location.controller, board: withChainState }];
       return { ...withChainState, chainNotices };
     }
 

@@ -451,16 +451,31 @@ export default function App() {
   const [revealed, setRevealed] = useState(false);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The player's own activation gets the same ~2s glow cue as an opponent's
+  // (see Board.tsx's enlargedKey), but not the opponent's manual-OK
+  // "Resolving X" modal -- the player already knows what they just did. What
+  // it's still missing without this: nothing held back the *next* prompt
+  // (a follow-up cost/target selection, a token's place/position choice, a
+  // fresh chain offer, anything) from rendering immediately, so a fast click
+  // could race right past the player's own animation. See holdForPlayerGlow
+  // below. Declared up here (above the reset-detection effect that follows)
+  // so that effect can clear it on a fresh attempt -- see its own comment.
+  const [playerGlowActive, setPlayerGlowActive] = useState(false);
+  const playerGlowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Enqueue every new opponent activation -- deliberately never overwrites
   // `current` or anything already queued. Reads board.chainNotices (an
-  // append-only log the reducer builds, one entry per "chaining" event --
-  // see boardState.ts) rather than watching board.currentChainLocation for
-  // transitions: several WS messages (and their setBoard calls) can land in
-  // the same React commit, and a watcher keyed on a single scalar's identity
-  // would only ever see the last of those, silently dropping the rest (e.g.
-  // Murakumo's own trigger, opened by Futsu reborning it on the same tick,
-  // never getting its own notice). Diffing against how many of the log's
-  // entries have already been queued catches all of them regardless.
+  // append-only log the reducer builds, one entry per "chaining" event,
+  // either controller -- see boardState.ts) rather than watching
+  // board.currentChainLocation for transitions: several WS messages (and
+  // their setBoard calls) can land in the same React commit, and a watcher
+  // keyed on a single scalar's identity would only ever see the last of
+  // those, silently dropping the rest (e.g. Murakumo's own trigger, opened
+  // by Futsu reborning it on the same tick, never getting its own notice).
+  // Diffing against how many of the log's entries have already been
+  // consumed catches all of them regardless. Filtered to controller 1 here
+  // -- the player's own entries are consumed separately below, by
+  // playerGlowActive's own effect, off the same shared log.
   const consumedNoticesRef = useRef(0);
   useEffect(() => {
     const all = board.chainNotices;
@@ -474,8 +489,9 @@ export default function App() {
       setCurrent(null);
     }
     if (consumedNoticesRef.current >= all.length) return;
-    const fresh = all.slice(consumedNoticesRef.current);
+    const fresh = all.slice(consumedNoticesRef.current).filter((n) => n.controller === 1);
     consumedNoticesRef.current = all.length;
+    if (fresh.length === 0) return;
     setNoticeQueue((q) => [...q, ...fresh]);
   }, [board.chainNotices]);
 
@@ -500,6 +516,52 @@ export default function App() {
   // Only for real unmount, not every board update -- see the note above.
   useEffect(() => {
     return () => { if (revealTimerRef.current) clearTimeout(revealTimerRef.current); };
+  }, []);
+
+  // Arms/re-arms playerGlowActive on every new chaining event belonging to
+  // the player -- off the same chainNotices log the opponent-notice queue
+  // above reads, filtered to controller 0 instead of 1. Not
+  // board.currentChainLocation: that scalar is what this used to watch, and
+  // it silently missed any activation that resolved with nothing further
+  // to ask (Allure of Darkness, Double Summon, ...) -- its own "chaining"
+  // and the immediately-following "chain_end" (which resets the scalar
+  // back to undefined) land in the same React batch, so a scalar-watching
+  // effect only ever observes the post-chain_end state and never fires at
+  // all. This has its own consumed-count ref (independent of
+  // consumedNoticesRef above) since the two effects filter the same shared
+  // log for different controllers and must not race each other's progress
+  // through it.
+  const consumedPlayerGlowRef = useRef(0);
+  useEffect(() => {
+    const all = board.chainNotices;
+    if (all.length < consumedPlayerGlowRef.current) {
+      // Reset for a new attempt -- see consumedNoticesRef's identical
+      // branch above. Without this, Restart clicked mid-flash left
+      // playerGlowActive stuck true for the rest of the attempt (nothing
+      // ever arms/clears it again), permanently holding every future
+      // prompt (reproduced live: resolved fine through the tokens, then
+      // nothing -- not even the idle Main Phase menu -- ever interactive
+      // again).
+      consumedPlayerGlowRef.current = 0;
+      if (playerGlowTimerRef.current) { clearTimeout(playerGlowTimerRef.current); playerGlowTimerRef.current = null; }
+      setPlayerGlowActive(false);
+    }
+    if (consumedPlayerGlowRef.current >= all.length) return;
+    const fresh = all.slice(consumedPlayerGlowRef.current).filter((n) => n.controller === 0);
+    consumedPlayerGlowRef.current = all.length;
+    if (fresh.length === 0) return;
+    // Only the hold window matters here (unlike the opponent queue, nothing
+    // needs to visibly show each entry in turn) -- (re)arm once for
+    // whichever of this batch is latest.
+    if (playerGlowTimerRef.current) clearTimeout(playerGlowTimerRef.current);
+    setPlayerGlowActive(true);
+    playerGlowTimerRef.current = setTimeout(() => {
+      setPlayerGlowActive(false);
+      playerGlowTimerRef.current = null;
+    }, 2000);
+  }, [board.chainNotices]);
+  useEffect(() => {
+    return () => { if (playerGlowTimerRef.current) clearTimeout(playerGlowTimerRef.current); };
   }, []);
 
   const promptKind = prompt?.prompt as string | undefined;
@@ -529,10 +591,21 @@ export default function App() {
   // rest of the queue) is deliberate: once the front of the queue is
   // dismissed, whatever's next takes its own turn on the next render.
   const promptHeldForNotice = current !== null && !showInteractiveOverlay;
+  // During the player's own activation glow (playerGlowActive, above), hold
+  // back every prompt kind, deliberately with no carve-out for "this is just
+  // a required continuation of the card that's already flashing" -- the
+  // point is that *nothing* progresses (a follow-up cost/target selection,
+  // a token's place/position choice, a fresh chain offer, anything) while
+  // the animation is still showing, so it never reads as "the effect
+  // already resolved before I even saw it flash." A prompt held this way
+  // isn't lost -- the raw `prompt` state is untouched, it just isn't handed
+  // to the UI as `effectivePrompt` until the ~2s window elapses, at which
+  // point it renders exactly as it would have immediately.
+  const holdForPlayerGlow = playerGlowActive;
   // Every other piece of prompt-driven UI below (Board's own rendering,
   // SelectionBar, PromptOverlay, ...) is keyed off this instead of the raw
   // `prompt` so a held prompt is treated as if nothing were pending yet.
-  const effectivePrompt = promptHeldForNotice ? null : prompt;
+  const effectivePrompt = (promptHeldForNotice || holdForPlayerGlow) ? null : prompt;
   const effectivePromptKind = effectivePrompt?.prompt as string | undefined;
 
   // Priority toggle OFF: whenever a quick-effect window opens (an optional
