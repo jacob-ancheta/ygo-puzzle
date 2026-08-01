@@ -45,6 +45,15 @@ function isFaceDownSpellTrap(card: CardRef | undefined): boolean {
 // identically-labeled ones. Hand-card options are already deduped
 // server-adjacent (idleBattleOptionsFor's own dedupeByCategory), so this is
 // a no-op there -- every group ends up size 1.
+// Activate reads as the primary action for a Spell/Trap in hand -- shown
+// first (Set last), rather than the engine's own idlecmd ordering (Set
+// before Activate). Array.sort is stable, so this only reorders Activate/Set
+// relative to each other and leaves every other action's relative order
+// (e.g. a monster's Summon/Change Position/Set) untouched.
+function menuActionPriority(action: string): number {
+  return action === "Activate" ? -1 : action === "Set" ? 1 : 0;
+}
+
 function groupMenuOptions(options: { option: IdleBattleOption; idx: number }[]) {
   const order: string[] = [];
   const groups = new Map<string, { option: IdleBattleOption; idx: number }[]>();
@@ -54,7 +63,8 @@ function groupMenuOptions(options: { option: IdleBattleOption; idx: number }[]) 
     if (!list) { list = []; groups.set(key, list); order.push(key); }
     list.push(entry);
   }
-  return order.map((action) => ({ action, entries: groups.get(action) as { option: IdleBattleOption; idx: number }[] }));
+  const sortedOrder = [...order].sort((a, b) => menuActionPriority(a) - menuActionPriority(b));
+  return sortedOrder.map((action) => ({ action, entries: groups.get(action) as { option: IdleBattleOption; idx: number }[] }));
 }
 
 const BOARD_PROMPTS = new Set(["idlecmd", "battlecmd", "card", "tribute", "sum", "select_unselect", "place", "chain"]);
