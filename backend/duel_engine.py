@@ -824,10 +824,20 @@ def ask_yesno(payload):
     return choice
 
 
-def ask_indices(payload, n, min_sel, max_sel):
+def ask_indices(payload, n, min_sel, max_sel, cancelable=False):
+    """`cancelable` lets the caller send {"cancel": true} in place of a
+    valid selection, returning None instead of a list. This is only ever
+    legal when the core itself flagged the prompt as cancelable (see the
+    "cancelable" byte on MSG_SELECT_CARD/MSG_SELECT_TRIBUTE) -- callers
+    with cancelable=True must respond to a None return by sending
+    engine.send_i(-1), not send_b(...), since core reads a cancel off
+    returns.ivalue[0] == -1 (see ygopro-core field::select_tribute), a
+    different union member than the selection byte array."""
     current = payload
     while True:
         response = yield current
+        if cancelable and (response or {}).get("cancel"):
+            return None
         chosen = (response or {}).get("indices")
         if (isinstance(chosen, list) and min_sel <= len(chosen) <= max_sel
                 and all(isinstance(i, int) and 0 <= i < n for i in chosen)
@@ -1625,15 +1635,26 @@ def run(engine):
                     engine.send_b([len(chosen)] + chosen)
                 pending = yield from interact(engine, ask)
             elif pending is None and player != 1:
+                # Cancel is only wired up for the tribute step, not a plain
+                # "card" select -- scoped to what tribute-summon cancel
+                # actually needs; other select_card prompts may also carry
+                # cancelable=1 for their own reasons, but exposing cancel
+                # there hasn't been asked for and isn't verified safe yet.
+                can_cancel = bool(cancelable) and has_release_param
                 def ask():
                     chosen = yield from ask_indices({"type": "prompt",
                                                       "prompt": "tribute" if has_release_param else "card",
                                                       "player": player, "min": min_sel, "max": max_sel,
+                                                      "can_cancel": can_cancel,
                                                       "items": [dict(card_brief(c), location=loc)
                                                                 for c, loc in items],
                                                       "source": chain_source()},
-                                                     len(items), min_sel, max_sel)
-                    engine.send_b([len(chosen)] + chosen)
+                                                     len(items), min_sel, max_sel,
+                                                     cancelable=can_cancel)
+                    if chosen is None:
+                        engine.send_i(-1)
+                    else:
+                        engine.send_b([len(chosen)] + chosen)
                 pending = yield from interact(engine, ask)
 
         elif msg == MSG_SELECT_CHAIN:

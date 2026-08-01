@@ -386,10 +386,27 @@ export default function App() {
       return;
     }
     const isFieldSpell = locationId === LOC.SZONE && card.type !== undefined && Boolean(card.type & TYPE_FIELD);
+    const openSequences = guessOpenZones(board, locationId, isFieldSpell);
+    // Nothing currently looks open -- for a Monster Zone Summon this means
+    // a Tribute Summon (every zone occupied, so a tribute is unavoidable
+    // before any zone can free up); for the Field Zone it means one's
+    // already there. Either way the guess can't possibly be right yet, so
+    // skip the client-side "pick a zone right now" overlay entirely and
+    // fall back to the same confirm-then-ask-server path Special
+    // Summon/Activate already use -- the server asks for tributes first,
+    // then sends the real "place" prompt once a zone has genuinely opened
+    // up. Without this, clicking Summon on a full field showed a zone
+    // picker with nothing in it to click, and the summon choice itself was
+    // never even sent to the server (reproduced live: no tribute prompt,
+    // no way to proceed at all).
+    if (openSequences.length === 0) {
+      respond({ choice: idx });
+      return;
+    }
     setPendingPlacement({
       card, idx, locationId,
       label: placementLabel(action, isFieldSpell),
-      openSequences: guessOpenZones(board, locationId, isFieldSpell),
+      openSequences,
       chosenSequence: null,
     });
   }
@@ -1029,6 +1046,9 @@ export default function App() {
           max={effectivePrompt.max as number}
           canConfirm={selection.length >= (effectivePrompt.min as number) && selection.length <= (effectivePrompt.max as number)}
           onConfirm={() => respond({ indices: selection })}
+          canFinish={effectivePromptKind === "tribute" && Boolean(effectivePrompt.can_cancel)}
+          finishLabel="Cancel"
+          onFinish={() => respond({ cancel: true })}
           rejected={retried}
           note={curatedSelect?.note}
         />

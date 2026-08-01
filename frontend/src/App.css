@@ -860,7 +860,12 @@
 .btn.primary { background: var(--accent-dim); border-color: var(--accent); color: var(--ink-950); font-weight: 600; }
 .btn.primary:hover { background: var(--accent); }
 .btn.small { padding: 4px 9px; font-size: 12px; }
-.btn.list-item { text-align: left; justify-content: flex-start; }
+/* Overrides .btn's own white-space: nowrap -- that rule is meant for short
+   toolbar labels (see its comment) and, left applied here too, forced a
+   card's full effect text (e.g. the multi-effect picker modal's option
+   list) onto one unbroken line that spilled straight past the modal's own
+   max-width instead of wrapping within it. */
+.btn.list-item { text-align: left; justify-content: flex-start; white-space: normal; }
 
 /* ---------- phase controls / selection bar ---------- */
 
