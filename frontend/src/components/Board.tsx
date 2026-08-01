@@ -185,7 +185,7 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
       setEnlargedPile(null);
       setEnlargedPileCard(null);
       glowTimerRef.current = null;
-    }, 2000);
+    }, 1000);
   }, [board.chainNotices]);
 
   // Only for real unmount, not every board update -- see the note above.

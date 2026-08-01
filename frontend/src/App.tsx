@@ -537,7 +537,7 @@ export default function App() {
     revealTimerRef.current = setTimeout(() => {
       setRevealed(true);
       revealTimerRef.current = null;
-    }, 2000);
+    }, 1000);
   }, [current, noticeQueue]);
 
   // Only for real unmount, not every board update -- see the note above.
@@ -585,7 +585,7 @@ export default function App() {
     playerGlowTimerRef.current = setTimeout(() => {
       setPlayerGlowActive(false);
       playerGlowTimerRef.current = null;
-    }, 2000);
+    }, 1000);
   }, [board.chainNotices]);
   useEffect(() => {
     return () => { if (playerGlowTimerRef.current) clearTimeout(playerGlowTimerRef.current); };

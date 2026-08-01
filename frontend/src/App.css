@@ -627,7 +627,7 @@
 }
 
 /* Pulse marking the card the opponent just activated -- see Board.tsx's
-   enlargedKey timer (cleared automatically after ~2s). A longer, dedicated
+   enlargedKey timer (cleared automatically after ~1s). A longer, dedicated
    transition than the general hover one above so the scale-up reads as a
    deliberate cue rather than a hover flicker. */
 .card-tile.enlarged {
