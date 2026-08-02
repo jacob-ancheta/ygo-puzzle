@@ -413,7 +413,14 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
                   with the same pulse + chain-link badge a board activation
                   gets. */}
               <div className="opp-hand-cell">
-                {enlargedHandCard ? (
+                {/* Gated on enlargedKey's own controller prefix, not just
+                    enlargedHandCard being set -- that state doesn't carry
+                    which side's hand the chaining card came from, so without
+                    this check the *player's* own hand activation (e.g. D.D.
+                    Crow) showed up face-up in the opponent's hand cell too,
+                    alongside the real reveal in the player's own hand row
+                    below (reproduced live). */}
+                {enlargedKey?.startsWith(`1:${LOC.HAND}:`) && enlargedHandCard ? (
                   <CardTile
                     card={enlargedHandCard}
                     enlarged

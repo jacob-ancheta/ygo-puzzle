@@ -136,6 +136,17 @@ class OpponentAI:
                 # location comparison, which is what actually tells the two
                 # apart -- code alone can't.
                 "self_target_only": bool(behaviour.get("self_target_only")),
+                # Tie-breaker between two *different* cards simultaneously
+                # legal in the same chain window -- lower wins. Unset means
+                # no preference, which falls back to `chains`' own order
+                # (whatever the engine happened to offer first) exactly like
+                # before this field existed. "trigger": "first" already
+                # covers the same-card-duplicates case (e.g. two Mirror
+                # Forces sharing one policy); this is for e.g. "Mirror Force
+                # before Dimensional Prison if both are legal" -- two
+                # distinct cards/policies with no other way to express an
+                # explicit preference between them.
+                "priority": behaviour.get("priority"),
             }
 
         # Keyed by (code, desc) rather than just code -- a card like
@@ -213,12 +224,20 @@ class OpponentAI:
     def choose_chain(self, chains, trigger_code, trigger_controller=None, attack_target_location=None):
         """chains: list of (forced, code, desc, location). Returns an index
         to pick, or -1 to pass (only meaningful when nothing in the list is
-        forced)."""
+        forced). Among several simultaneously-legal, non-forced candidates,
+        prefers whichever has the lowest explicit eff_behaviour "priority"
+        (unset falls back to `chains`' own order, i.e. no-op for every
+        puzzle that doesn't set one)."""
         def is_target(location):
             # attack_target_location is None both outside of an attack
             # window and for a direct attack (no monster target) -- either
             # way, nothing should count as "the" target then.
             return attack_target_location is not None and location == attack_target_location
+
+        def priority_of(code):
+            policy = self.policies.get(code)
+            p = policy.get("priority") if policy else None
+            return p if p is not None else float("inf")
 
         any_forced = any(forced for forced, _, _, _ in chains)
         if any_forced:
@@ -227,11 +246,14 @@ class OpponentAI:
                                                      self_is_target=is_target(location)):
                     return i
             return next(i for i, (forced, _, _, _) in enumerate(chains) if forced)
-        for i, (_forced, code, desc, location) in enumerate(chains):
-            if self.should_activate(code, desc, trigger_code, trigger_controller,
-                                     self_is_target=is_target(location)):
-                return i
-        return -1
+        candidates = [i for i, (_forced, code, desc, location) in enumerate(chains)
+                      if self.should_activate(code, desc, trigger_code, trigger_controller,
+                                               self_is_target=is_target(location))]
+        if not candidates:
+            return -1
+        # min() is stable -- ties (including the all-unset default) resolve
+        # to whichever candidate came first in `chains`, same as before.
+        return min(candidates, key=lambda i: priority_of(chains[i][1]))
 
     def note_activated(self, code, desc):
         self.activated.add((code, desc))

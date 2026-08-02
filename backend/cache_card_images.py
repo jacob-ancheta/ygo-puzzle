@@ -59,6 +59,8 @@ def puzzle_card_names(puzzle):
     names += [e["name"] if isinstance(e, dict) else e for e in puzzle.get("opponent_hand", [])]
     names += [e["name"] for e in puzzle.get("player_spelltrap", [])]
     names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]
+    names += puzzle.get("opponent_extra", [])
+    names += puzzle.get("opponent_deck", [])
     return names
 
 
