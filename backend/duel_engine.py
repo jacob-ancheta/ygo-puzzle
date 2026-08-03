@@ -468,12 +468,21 @@ class DuelEngine:
         # carries no "set this turn" restriction) or "faceup" (a continuous
         # card already active -- new_card() enables a face-up on-field
         # card's effects at placement, see ygopro-core's ocgapi.cpp).
+        # Sequence defaults to list order (0, 1, 2, ...), same as always --
+        # an entry can override it with an explicit "sequence" key instead,
+        # needed to land a Field Spell at zone 5 (see Board.tsx's FIELD_SEQ,
+        # which renders whatever's actually sitting in that exact zone, not
+        # whichever card happens to have the Field type) when there aren't
+        # 5 other Spell/Trap cards on that side to push it there by list
+        # position alone, unlike 2026-07-31's 5-Crystal-Beast puzzle.
         for i, entry in enumerate(puzzle.get("player_spelltrap", [])):
             pos = POS_FACEUP if entry["position"] == "faceup" else POS_FACEDOWN
-            self._place(self.resolved[entry["name"]]["code"], 0, LOCATION_SZONE, i, pos)
+            seq = entry.get("sequence", i)
+            self._place(self.resolved[entry["name"]]["code"], 0, LOCATION_SZONE, seq, pos)
         for i, entry in enumerate(puzzle.get("opponent_spelltrap", [])):
             pos = POS_FACEUP if entry["position"] == "faceup" else POS_FACEDOWN
-            self._place(self.resolved[entry["name"]]["code"], 1, LOCATION_SZONE, i, pos)
+            seq = entry.get("sequence", i)
+            self._place(self.resolved[entry["name"]]["code"], 1, LOCATION_SZONE, seq, pos)
 
         lib.start_duel(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(DUEL_ATTACK_FIRST_TURN))
 
@@ -562,12 +571,20 @@ def initial_board_state(engine):
                                for e in puzzle.get("opponent_graveyard", [])],
         "opponent_hand": [brief(e["name"] if isinstance(e, dict) else e)
                           for e in puzzle.get("opponent_hand", [])],
+        # "zone" mirrors the same optional "sequence" override _place() uses
+        # (see the placement loop below) -- without it, a Field Spell placed
+        # via "sequence": 5 still gets placed at zone 5 for real inside the
+        # engine, but this initial snapshot (what the client actually
+        # renders on load) reported it at its plain list index instead,
+        # showing it in a regular Spell/Trap slot rather than the Field Zone
+        # (reproduced live: Harpies' Hunting Ground rendered in the middle
+        # Spell/Trap slot instead of the Field Zone cell).
         "player_spelltrap": [
-            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            {"card": brief(entry["name"]), "zone": entry.get("sequence", i), "position": entry["position"]}
             for i, entry in enumerate(puzzle.get("player_spelltrap", []))
         ],
         "opponent_spelltrap": [
-            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            {"card": brief(entry["name"]), "zone": entry.get("sequence", i), "position": entry["position"]}
             for i, entry in enumerate(puzzle.get("opponent_spelltrap", []))
         ],
         # Count only, not the card list -- symmetric with how the opponent's
