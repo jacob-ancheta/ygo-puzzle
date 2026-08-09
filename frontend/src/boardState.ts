@@ -308,7 +308,7 @@ export function applyEvent(board: BoardState, item: Record<string, unknown>): Bo
       b.deck = { 0: item.player_deck as CardRef[], 1: (item.opponent_deck_count as number | undefined) ?? 0 };
       b.debugOpponentDeck = item.opponent_deck as ZoneCard[] | undefined;
       b.extra = { 0: item.player_extra as CardRef[], 1: (item.opponent_extra_count as number | undefined) ?? 0 };
-      b.banished = { 0: (item.player_banished ?? []) as CardRef[], 1: [] };
+      b.banished = { 0: (item.player_banished ?? []) as CardRef[], 1: (item.opponent_banished ?? []) as CardRef[] };
       b.gy = { 0: (item.player_graveyard ?? []) as CardRef[], 1: (item.opponent_graveyard ?? []) as CardRef[] };
       return b;
     }

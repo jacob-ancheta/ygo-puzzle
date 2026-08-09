@@ -82,6 +82,7 @@ def resolve_all(puzzle):
     names += [e["name"] for e in puzzle.get("opponent_spelltrap", [])]
     names += puzzle.get("opponent_extra", [])
     names += puzzle.get("opponent_deck", [])
+    names += puzzle.get("opponent_banished", [])
     resolved, failed = {}, []
     for name in names:
         card = get_card_by_name(name)
@@ -441,6 +442,11 @@ class DuelEngine:
             self._place(card["code"], 0, LOCATION_MZONE, i, field_position(entry, card))
         for i, name in enumerate(puzzle.get("player_banished", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_REMOVED, i, POS_FACEUP_ATTACK)
+        # Symmetric with player_banished -- the Banished zone is public
+        # information in real play (unlike the Deck/Hand), so this is a real
+        # card list sent to the client, not a hidden count.
+        for i, name in enumerate(puzzle.get("opponent_banished", [])):
+            self._place(self.resolved[name]["code"], 1, LOCATION_REMOVED, i, POS_FACEUP_ATTACK)
         # Optional -- seeds the opponent's graveyard so effects like Futsu no
         # Mitama no Mitsurugi's "target 1 Reptile monster in your GY; Special
         # Summon it" have something to reborn from a puzzle's very start.
@@ -550,22 +556,45 @@ def initial_board_state(engine):
     def brief(name):
         return card_brief(engine.resolved[name]["code"])
 
+    # Pre-placed Monster Zone cards can already have live stats that differ
+    # from cards.db's printed ones -- equipped Spells (Debug.PreEquip, see
+    # build_puzzle_setup_script), attached Xyz materials, an already-active
+    # Continuous Spell/Trap's ATK/DEF boost, etc. brief() only ever has the
+    # base printed stats, and the client's own stats_update event (see
+    # query_live_stats) doesn't fire until the first real summon happens
+    # ANYWHERE on the field -- so without this, a pre-boosted monster showed
+    # its base stats until some unrelated summon incidentally refreshed the
+    # whole field (reproduced live: Golden Homunculus's 4 equips gave it
+    # 9300/5400 ATK/DEF internally from duel start, but the client kept
+    # showing its base 1500/1500 the entire time nothing else had summoned).
+    live_by_zone = {(c["controller"], c["sequence"]): c for c in query_live_stats(engine)}
+
+    def field_brief(controller, zone, name):
+        card = brief(name)
+        live = live_by_zone.get((controller, zone))
+        if live and card.get("type", 0) & TYPE_MONSTER:
+            card = dict(card, attack=live["attack"], materials=live["materials"])
+            if not (card["type"] & TYPE_LINK):
+                card["defense"] = live["defense"]
+        return card
+
     return {
         "type": "event",
         "event": "board_state",
         "lp": dict(puzzle["lp"]),
         "opponent_field": [
-            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            {"card": field_brief(1, i, entry["name"]), "zone": i, "position": entry["position"]}
             for i, entry in enumerate(puzzle.get("opponent_field", []))
         ],
         "player_hand": [brief(name) for name in puzzle.get("player_hand", [])],
         "player_deck": [brief(name) for name in puzzle.get("player_deck", [])],
         "player_extra": [brief(name) for name in puzzle.get("player_extra", [])],
         "player_field": [
-            {"card": brief(entry["name"]), "zone": i, "position": entry["position"]}
+            {"card": field_brief(0, i, entry["name"]), "zone": i, "position": entry["position"]}
             for i, entry in enumerate(puzzle.get("player_field", []))
         ],
         "player_banished": [brief(name) for name in puzzle.get("player_banished", [])],
+        "opponent_banished": [brief(name) for name in puzzle.get("opponent_banished", [])],
         "player_graveyard": [brief(name) for name in puzzle.get("player_graveyard", [])],
         "opponent_graveyard": [brief(e["name"] if isinstance(e, dict) else e)
                                for e in puzzle.get("opponent_graveyard", [])],
