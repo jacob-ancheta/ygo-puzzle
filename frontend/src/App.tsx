@@ -13,6 +13,7 @@ import ResetCountdown from "./components/ResetCountdown";
 import LeaderboardModal from "./components/LeaderboardModal";
 import ArchiveModal from "./components/ArchiveModal";
 import FeedbackModal from "./components/FeedbackModal";
+import WelcomeBackModal from "./components/WelcomeBackModal";
 import LossModal from "./components/LossModal";
 import WinModal, { ordinal, CLAIM_QUERY_PARAM } from "./components/WinModal";
 import { USERNAME_QUERY_PARAM } from "./components/SignInForm";
@@ -328,6 +329,18 @@ export default function App() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+
+  // One-time announcement modal, gated on a versioned localStorage key so
+  // it shows once per new message (bump the suffix to re-show it to
+  // everyone) rather than nagging on every single visit.
+  const WELCOME_BACK_KEY = "welcomeBackSeen_2026-08-13";
+  const [showWelcomeBack, setShowWelcomeBack] = useState(
+    () => localStorage.getItem(WELCOME_BACK_KEY) !== "1",
+  );
+  function dismissWelcomeBack() {
+    localStorage.setItem(WELCOME_BACK_KEY, "1");
+    setShowWelcomeBack(false);
+  }
 
   // Symmetric open/close (not "open once, dismiss manually") so a restart
   // -- which resets board.status back to "playing" -- automatically
@@ -966,6 +979,8 @@ export default function App() {
         <ResetCountdown />
         <AuthPanel user={user} accessToken={session?.access_token} signInWithEmail={signInWithEmail} signOut={signOut} />
       </header>
+
+      {showWelcomeBack && <WelcomeBackModal onClose={dismissWelcomeBack} />}
 
       {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
 
