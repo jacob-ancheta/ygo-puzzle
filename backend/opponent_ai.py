@@ -102,9 +102,24 @@ class OpponentAI:
             if not behaviour:
                 continue
             code = resolved[entry["name"]]["code"]
+            raw_respond_to = behaviour.get("respond_to")
             self.policies[code] = {
                 "trigger": behaviour.get("trigger", "always"),
-                "respond_to": _resolve_trigger_names(behaviour.get("respond_to")),
+                # "any" is a sentinel (not a real trigger, so it must be
+                # special-cased before _resolve_trigger_names -- that
+                # function would otherwise try to resolve it as a literal
+                # card name and fail loudly): matches any *real* trigger but
+                # excludes trigger_code=None. Needed for a reactive card
+                # with no precondition of its own (e.g. a plain Continuous
+                # Trap) that should fire on "whatever the player does
+                # first," not tied to one specific card or to "attack" --
+                # without it, "always" alone grabs the trigger-less
+                # MSG_SELECT_CHAIN window that fires at duel setup, before
+                # the player has done anything at all (see Gravity Bind/
+                # Mirror Force's own respond_to: "attack" workaround for the
+                # same underlying issue, scoped to one specific trigger
+                # instead of "any real one").
+                "respond_to": "any" if raw_respond_to == "any" else _resolve_trigger_names(raw_respond_to),
                 # Inverse of respond_to -- skip an otherwise-legal activation
                 # opportunity when it was triggered by one of these specific
                 # cards (e.g. Baronne de Fleur's negate should fire on
@@ -169,7 +184,7 @@ class OpponentAI:
     # ---- whether-to-activate decisions ----
 
     def should_activate(self, code, desc, trigger_code=None, trigger_controller=None, require_trigger=False,
-                         self_is_target=False):
+                         self_is_target=False, any_card_moved=True):
         policy = self.policies.get(code)
         if not policy:
             return False
@@ -191,7 +206,17 @@ class OpponentAI:
         if require_trigger and trigger_code is None and not policy.get("proactive"):
             return False
         respond_to = policy["respond_to"]
-        if respond_to is not None and trigger_code not in respond_to:
+        if respond_to == "any":
+            if trigger_code is None and not any_card_moved:
+                # The one case "any" is specifically meant to exclude: the
+                # genuinely-nothing-has-happened-yet window at duel setup.
+                # trigger_code alone can't tell that apart from a legitimate
+                # later window with nothing currently chaining (e.g. right
+                # after a plain Summon with no chained effect) -- that's
+                # what any_card_moved is for (see duel_engine.py's
+                # any_card_moved).
+                return False
+        elif respond_to is not None and trigger_code not in respond_to:
             # Not a matching opportunity at all -- doesn't count against
             # "first" either, so a later matching trigger still gets it.
             return False
@@ -221,7 +246,8 @@ class OpponentAI:
             return False
         return True
 
-    def choose_chain(self, chains, trigger_code, trigger_controller=None, attack_target_location=None):
+    def choose_chain(self, chains, trigger_code, trigger_controller=None, attack_target_location=None,
+                      any_card_moved=True):
         """chains: list of (forced, code, desc, location). Returns an index
         to pick, or -1 to pass (only meaningful when nothing in the list is
         forced). Among several simultaneously-legal, non-forced candidates,
@@ -243,12 +269,14 @@ class OpponentAI:
         if any_forced:
             for i, (forced, code, desc, location) in enumerate(chains):
                 if forced and self.should_activate(code, desc, trigger_code, trigger_controller,
-                                                     self_is_target=is_target(location)):
+                                                     self_is_target=is_target(location),
+                                                     any_card_moved=any_card_moved):
                     return i
             return next(i for i, (forced, _, _, _) in enumerate(chains) if forced)
         candidates = [i for i, (_forced, code, desc, location) in enumerate(chains)
                       if self.should_activate(code, desc, trigger_code, trigger_controller,
-                                               self_is_target=is_target(location))]
+                                               self_is_target=is_target(location),
+                                               any_card_moved=any_card_moved)]
         if not candidates:
             return -1
         # min() is stable -- ties (including the all-unset default) resolve

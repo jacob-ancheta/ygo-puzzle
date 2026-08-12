@@ -1002,6 +1002,18 @@ def run(engine):
     # MSG_CHAIN_SOLVING -- None before any link has started resolving, or
     # once the whole chain has ended (MSG_CHAIN_END).
     current_solving_link = None
+    # True once *any* card has genuinely moved zones this duel -- i.e. the
+    # player has done something, even something as plain as a Normal Summon
+    # with no chained effect at all. Distinct from last_chaining_code: that
+    # only tracks the most recent *chain* activation and stays None for a
+    # plain Summon/Set with nothing chained onto it, which would otherwise
+    # make the opponent's very next legitimate priority-pass window
+    # (trigger_code=None) indistinguishable from the genuinely-nothing-has-
+    # happened-yet window at duel setup that opponent_ai.py's "any"
+    # respond_to sentinel exists to exclude. MSG_MOVE is the most general
+    # "something happened" signal available -- it fires for essentially any
+    # card changing zone (summoned, set, sent to GY, banished, ...).
+    any_card_moved = False
 
     def chain_source():
         # Attached to prompts whose UI needs "who is asking" (e.g. "select a
@@ -1068,6 +1080,7 @@ def run(engine):
             cur = stream.u32()
             stream.u32()  # reason, not needed
             recently_touched.add(code)
+            any_card_moved = True
             yield {"type": "event", "event": "move", "card": card_brief(code),
                    "from": describe_location(prev), "to": describe_location(cur)}
 
@@ -1753,7 +1766,8 @@ def run(engine):
                 # eff_behaviour policy (see opponent_ai.py); a forced chain
                 # must pick one regardless of policy.
                 choice = engine.opponent_ai.choose_chain(
-                    chains, last_chaining_code, last_chaining_controller, last_attack_target_location)
+                    chains, last_chaining_code, last_chaining_controller, last_attack_target_location,
+                    any_card_moved)
                 if choice != -1:
                     engine.opponent_ai.note_activated(chains[choice][1], chains[choice][2])
                 engine.send_i(choice)
@@ -1987,13 +2001,23 @@ def run(engine):
                     # Confirm button stayed disabled with the one correct
                     # material selected, for a puzzle needing exactly 1
                     # tuner + 1 non-tuner with no other legal combination).
+                    #
+                    # level=sum_param overrides card_brief()'s printed/base
+                    # level with the value the core is actually summing for
+                    # this prompt -- level-modulation effects (Descending
+                    # Lost Star's "-1 Level" on Special Summon, Delta Flyer's
+                    # "+1 Level", etc.) change what a monster counts as here
+                    # without touching cards.db. Without this override the
+                    # client's isSumOptionSelectable() reachability check
+                    # (interaction.ts) runs on the wrong number and can gray
+                    # out the one legal material combination.
                     lo, hi = min_sel, max_sel
                     chosen = yield from ask_indices(
                         {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
                          "min": lo, "max": hi,
                          "note": "auto-choice wasn't legal", "source": chain_source(),
-                         "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
-                         "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
+                         "must_include": [dict(card_brief(c), level=sp, location=loc) for c, sp, loc in must_items],
+                         "options": [dict(card_brief(c), level=sp, location=loc) for c, sp, loc in opt_items]},
                         len(codes), lo, hi)
                     chosen = sorted_by_level_desc(chosen)
                     engine.send_b([len(chosen) + must_n] + [0] * must_n + chosen)
@@ -2003,12 +2027,15 @@ def run(engine):
                     codes = [c for c, _, _ in opt_items]
                     # See the player==1 branch above for why min_sel/max_sel
                     # are used as-is (no further -must_n subtraction).
+                    #
+                    # level=sum_param -- see the player==1 branch above for
+                    # why this overrides card_brief()'s printed level.
                     lo, hi = min_sel, max_sel
                     chosen = yield from ask_indices(
                         {"type": "prompt", "prompt": "sum", "player": player, "target": acc,
                          "min": lo, "max": hi, "source": chain_source(),
-                         "must_include": [dict(card_brief(c), location=loc) for c, _, loc in must_items],
-                         "options": [dict(card_brief(c), location=loc) for c, _, loc in opt_items]},
+                         "must_include": [dict(card_brief(c), level=sp, location=loc) for c, sp, loc in must_items],
+                         "options": [dict(card_brief(c), level=sp, location=loc) for c, sp, loc in opt_items]},
                         len(codes), lo, hi)
                     chosen = sorted_by_level_desc(chosen)
                     engine.send_b([len(chosen) + must_n] + [0] * must_n + chosen)

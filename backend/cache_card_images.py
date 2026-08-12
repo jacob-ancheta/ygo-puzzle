@@ -11,9 +11,17 @@ official card IDs already used by cards.db, so no name-matching needed):
   - full/{code}.jpg     the whole card, for a description popup
   - cropped/{code}.jpg  art-only crop, for small board tiles
 
+Only one image is stored per card: get_card_by_name() returns a single row,
+so alternate arts (cards.db carries a dozen alias codes for e.g. Dark
+Magician Girl) are never fetched -- the code cached here is the same one
+duel_engine.card_brief() builds its /card_images/ URLs from, which is what
+the app actually renders.
+
 Usage:
     python cache_card_images.py              # every puzzle in puzzles/
     python cache_card_images.py 2026-07-09   # just that one puzzle
+    python cache_card_images.py --prune      # + delete art no puzzle needs
+    python cache_card_images.py --prune --dry-run
 """
 import os
 import re
@@ -22,7 +30,7 @@ import time
 import urllib.error
 import urllib.request
 
-from card_lookup import get_card_by_name, search_cards
+from card_lookup import get_card, get_card_by_name, search_cards
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PUZZLES_DIR = os.path.join(BACKEND_DIR, "puzzles")
@@ -113,10 +121,54 @@ def cache_images_for(codes):
     return cached, skipped, failed
 
 
+def cached_codes(variant):
+    d = os.path.join(IMAGES_DIR, variant)
+    if not os.path.isdir(d):
+        return set()
+    return {int(f[:-4]) for f in os.listdir(d) if f.endswith(".jpg") and f[:-4].isdigit()}
+
+
+def prune(keep_codes, dry_run):
+    """Delete cached art for cards no puzzle references any more -- leftovers
+    from puzzles that were edited or dropped.
+
+    Deliberately gated on having scanned EVERY puzzle (see main): pruning
+    against one date would wipe the entire rest of the cache. Note this only
+    sees cards a puzzle *seeds*; art for a card that only ever enters play
+    mid-duel (a token an effect creates, say) has no name in the puzzle dict
+    to match on, so it looks orphaned. Nothing does that today, but check the
+    printed list before saying yes if that ever changes.
+    """
+    orphans = sorted(
+        (variant, code)
+        for variant in CDN_VARIANTS
+        for code in cached_codes(variant) - keep_codes
+    )
+    if not orphans:
+        print("\nNothing to prune -- no cached art is unused.")
+        return
+
+    names = sorted({(get_card(code) or {}).get("name", f"<code {code}>") for _, code in orphans})
+    print(f"\n{len(orphans)} unused file(s) across {len(names)} card(s):")
+    for name in names:
+        print(f"  {name}")
+
+    if dry_run:
+        print("(--dry-run: nothing deleted)")
+        return
+    for variant, code in orphans:
+        os.remove(os.path.join(IMAGES_DIR, variant, f"{code}.jpg"))
+    print(f"Deleted {len(orphans)} file(s).")
+
+
 def main():
-    if len(sys.argv) > 1:
-        dates = [sys.argv[1]]
-    else:
+    args = sys.argv[1:]
+    do_prune = "--prune" in args
+    dry_run = "--dry-run" in args
+    dates = [a for a in args if not a.startswith("--")]
+
+    all_puzzles = not dates
+    if all_puzzles:
         dates = sorted(
             m.group(1) for fname in os.listdir(PUZZLES_DIR)
             for m in [DATE_RE.match(fname)] if m
@@ -132,6 +184,13 @@ def main():
     print(f"\nCaching images for {len(all_codes)} unique card(s) total...")
     cached, skipped, failed = cache_images_for(all_codes)
     print(f"Done. {cached} downloaded, {skipped} already cached, {failed} failed.")
+
+    if do_prune:
+        if not all_puzzles:
+            print("\nRefusing to prune: --prune needs every puzzle scanned, "
+                  "but a specific date was given. Re-run without the date.")
+            return
+        prune(all_codes, dry_run)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, type MouseEvent } from "react";
 import type { BoardState, ZoneCard } from "../boardState";
 import { LOC, zoneKey } from "../boardState";
 import type { CardRef } from "../protocol";
@@ -39,6 +39,15 @@ export interface PendingPlacementView {
 
 interface Props {
   board: BoardState;
+  // Whether the enlarge/glow cue (see enlargedKey below) should be showing
+  // right now -- App.tsx's `current !== null || playerGlowActive`, i.e. the
+  // opponent-notice-queue window or the player's own ~1s flash. Needed
+  // because board.currentChainLocation (what enlargedKey derives from)
+  // isn't itself time-scoped -- it stays set for the chain's entire
+  // resolution, cleared only by chain_end, so without this gate the glow
+  // would stay "on" through a whole follow-up selection phase instead of
+  // just its own brief pulse.
+  glowActive: boolean;
   // App.tsx substitutes null here (regardless of what the server actually
   // sent) while an opponent-activation notice is still pending its own 2s
   // glow-and-reveal or "Resolving X" acknowledgment -- so every
@@ -91,7 +100,7 @@ const EMZ_SEQS = [5, 6];
 // pendulum-zone comments for the same numbering).
 const FIELD_SEQ = 5;
 
-export default function Board({ board, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onChainChoice, onChainPass, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback, pendingPlacement, onGuessedZoneClick, onCancelPlacement }: Props) {
+export default function Board({ board, glowActive, prompt, selection, onCardMenu, onSelectToggle, onUnselectChoice, onPlaceChoice, onChainChoice, onChainPass, onPhaseClick, canChangePhase, onCardDetail, pileView, setPileView, pendingFinalChoice, placingCardFallback, pendingPlacement, onGuessedZoneClick, onCancelPlacement }: Props) {
   // Close the pile browser whenever a new prompt comes in -- most obviously
   // so it gets out of the way for a selection overlay that needs the same
   // spot, but also so it doesn't linger stale once the prompt resolves.
@@ -106,28 +115,51 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   // activations and mandatory/triggered effects (e.g. Dandylion's forced
   // Special Summon) get the same cue as an opponent's, rather than only the
   // opponent's own activations getting any flash at all.
-  const [enlargedKey, setEnlargedKey] = useState<string | null>(null);
-  const [enlargedChainLink, setEnlargedChainLink] = useState<number | null>(null);
+  //
+  // Derived directly from `board.currentChainLocation`/`currentChainCard`/
+  // `currentChainLink` -- NOT tracked with its own useState/useTimer (an
+  // earlier version independently diffed board.chainNotices with a
+  // useRef-tracked "consumed" count and a manual 1s setTimeout). That
+  // approach broke once `board` here started resolving to different frozen
+  // per-notice snapshots rather than always the live board (see App.tsx's
+  // displayBoard/playerGlowBoard): each snapshot's own chainNotices is
+  // frozen at a different length (recorded *before* that link's own entry
+  // was appended, so it doesn't even include itself), so a naive
+  // "did chainNotices grow" diff sees the array *shrink* every time
+  // `board` swaps to an earlier-taken snapshot and resets its consumed
+  // count -- reproduced live as a set Trap glowing while still showing its
+  // face-down back (the glow was chasing a chainNotices timeline out of
+  // sync with which snapshot was actually on screen) and glowing a second
+  // time after dismissing its own notice. Deriving straight from the
+  // snapshot's own currentChain* fields instead means the glow is always
+  // reading the exact same frozen instant as everything else on screen --
+  // there's nothing left for it to fall out of sync *with*.
+  //
+  // Gated on glowActive (see Props) since currentChainLocation itself isn't
+  // time-scoped -- it stays set for the chain's whole resolution, not just
+  // this one link's own brief pulse, so without the gate the glow kept
+  // showing through an entire follow-up selection phase instead of playing
+  // its normal ~1s duration and clearing.
+  const activeChainLoc = glowActive ? board.currentChainLocation : null;
+  const enlargedKey = activeChainLoc
+    ? zoneKey(activeChainLoc.controller, activeChainLoc.location_id, activeChainLoc.sequence)
+    : null;
+  const enlargedChainLink = board.currentChainLink ?? null;
   // An opponent *hand* activation (a hand trap like Maxx "C") has no board
-  // slot for enlargedKey to match -- capture the activating card itself so
-  // the hand cell in the lp-strip can display it face-up with the same
-  // pulse + chain-link badge for the glow window. Snapshotted here rather
-  // than read live from board.currentChainCard at render time, since the
-  // chain can fully resolve (clearing currentChainCard) before the 2s glow
-  // is done.
-  const [enlargedHandCard, setEnlargedHandCard] = useState<CardRef | null>(null);
+  // slot for enlargedKey to match -- the activating card itself, so the
+  // hand cell in the lp-strip can display it face-up with the same pulse +
+  // chain-link badge for the glow window.
+  const enlargedHandCard = activeChainLoc?.location_id === LOC.HAND ? board.currentChainCard ?? null : null;
   // Same idea as enlargedHandCard, but for a card chaining from a GY/
   // Banished pile (e.g. Kuribohrn's own "when an opponent's monster
   // declares an attack" GY effect) -- PileCell only ever shows one face for
   // the whole pile (whatever's last in the array), so without this the
   // activating card never actually appears on top, let alone glows, unless
-  // it already happened to be the most-recently-added card. Cleared the
-  // same way as enlargedHandCard once the glow window ends, at which point
-  // PileCell falls back to its normal last-added-card display -- i.e. it
-  // "returns to its previous spot" for free, just by no longer overriding it.
-  const [enlargedPile, setEnlargedPile] = useState<{ controller: number; locationId: number } | null>(null);
-  const [enlargedPileCard, setEnlargedPileCard] = useState<CardRef | null>(null);
-  const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // it already happened to be the most-recently-added card.
+  const enlargedPile = activeChainLoc && (activeChainLoc.location_id === LOC.GY || activeChainLoc.location_id === LOC.BANISHED)
+    ? { controller: activeChainLoc.controller, locationId: activeChainLoc.location_id }
+    : null;
+  const enlargedPileCard = enlargedPile ? board.currentChainCard ?? null : null;
 
   // While the "which zone?" step for a just-chosen Summon/Set is still a
   // pure client-side guess (pendingPlacement, set by App.tsx's
@@ -141,57 +173,6 @@ export default function Board({ board, prompt, selection, onCardMenu, onSelectTo
   // pendingPlacement/`guessed` directly, not `prompt`, so nulling it here
   // only removes that stale leftover affordance, never the guess UI.
   const fieldPrompt = pendingPlacement ? null : prompt;
-  // Off board.chainNotices (an append-only log, one entry per "chaining"
-  // event, either controller -- see boardState.ts), not
-  // board.currentChainLocation directly: that scalar silently missed any
-  // activation that resolved with nothing further to ask (e.g. Allure of
-  // Darkness, Double Summon) -- its own "chaining" and the
-  // immediately-following "chain_end" (which resets the scalar back to
-  // undefined) land in the same React batch, so a scalar-watching effect
-  // only ever observes the post-chain_end state and the flash never shows
-  // at all (reproduced live). Each notice entry's own board snapshot
-  // carries currentChainLocation exactly as it was at that instant, so
-  // reading from there is immune to the same batching.
-  const consumedGlowNoticesRef = useRef(0);
-  useEffect(() => {
-    const all = board.chainNotices;
-    if (all.length < consumedGlowNoticesRef.current) consumedGlowNoticesRef.current = 0;
-    if (consumedGlowNoticesRef.current >= all.length) return;
-    const fresh = all.slice(consumedGlowNoticesRef.current);
-    consumedGlowNoticesRef.current = all.length;
-    // Only the visible flash matters here, not showing each one in turn
-    // (that's the opponent-notice queue's job, see App.tsx) -- (re)glow
-    // once for whichever of this batch is latest.
-    const notice = fresh[fresh.length - 1];
-    const loc = notice.board.currentChainLocation;
-    if (!loc) return;
-    // Cancel-and-restart (rather than a per-effect cleanup keyed on this
-    // same dependency) so the glow reliably runs for its full 2s even if
-    // the chain fully resolves (chain_end) faster than that -- only a
-    // genuinely new activation, handled here, should cut an in-flight glow
-    // short.
-    if (glowTimerRef.current) clearTimeout(glowTimerRef.current);
-    const key = zoneKey(loc.controller, loc.location_id, loc.sequence);
-    setEnlargedKey(key);
-    setEnlargedChainLink(notice.chainLink ?? null);
-    setEnlargedHandCard(loc.location_id === LOC.HAND ? notice.card ?? null : null);
-    const isPile = loc.location_id === LOC.GY || loc.location_id === LOC.BANISHED;
-    setEnlargedPile(isPile ? { controller: loc.controller, locationId: loc.location_id } : null);
-    setEnlargedPileCard(isPile ? notice.card ?? null : null);
-    glowTimerRef.current = setTimeout(() => {
-      setEnlargedKey(null);
-      setEnlargedChainLink(null);
-      setEnlargedHandCard(null);
-      setEnlargedPile(null);
-      setEnlargedPileCard(null);
-      glowTimerRef.current = null;
-    }, 1000);
-  }, [board.chainNotices]);
-
-  // Only for real unmount, not every board update -- see the note above.
-  useEffect(() => {
-    return () => { if (glowTimerRef.current) clearTimeout(glowTimerRef.current); };
-  }, []);
 
   function chainLinkBadgeFor(key: string): number | undefined {
     return enlargedKey === key ? (enlargedChainLink ?? undefined) : undefined;

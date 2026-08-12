@@ -489,6 +489,18 @@ export default function App() {
   // so that effect can clear it on a fresh attempt -- see its own comment.
   const [playerGlowActive, setPlayerGlowActive] = useState(false);
   const playerGlowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Frozen board snapshot for the player's own glow window, same idea as
+  // the opponent notice queue's `current.board` (see displayBoard below) --
+  // without this, a same-batch response from the opponent (e.g. Back to the
+  // Front chaining onto Brilliant Fusion) already shows face-up on the live
+  // board *during* the player's own flash, since board.zones updates
+  // unconditionally the instant its own events land, regardless of glow
+  // pacing. The opponent's own reveal already happened, invisibly, before
+  // its own notice ever got a chance to show it -- reproduced live as the
+  // set trap "just kinda flipping over" with no visible reveal moment: by
+  // the time its glow appeared, the board had already looked that way for
+  // however long the player's own flash had been showing.
+  const [playerGlowBoard, setPlayerGlowBoard] = useState<BoardState | null>(null);
 
   // Enqueue every new opponent activation -- deliberately never overwrites
   // `current` or anything already queued. Reads board.chainNotices (an
@@ -529,7 +541,13 @@ export default function App() {
   // reveal window, and it must still get its full glow duration and still
   // require an explicit acknowledgment either way.
   useEffect(() => {
-    if (current || noticeQueue.length === 0) return;
+    // Also wait out the player's own glow window (if one's active) before
+    // advancing -- without this, a same-batch opponent response (e.g. Back
+    // to the Front chaining onto Brilliant Fusion) started showing its own
+    // notice *simultaneously* with the player's flash instead of after it,
+    // since the two are otherwise fully independent timers racing off the
+    // same underlying chainNotices log.
+    if (current || noticeQueue.length === 0 || playerGlowActive) return;
     setCurrent(noticeQueue[0]);
     setNoticeQueue((q) => q.slice(1));
     setRevealed(false);
@@ -538,7 +556,7 @@ export default function App() {
       setRevealed(true);
       revealTimerRef.current = null;
     }, 1000);
-  }, [current, noticeQueue]);
+  }, [current, noticeQueue, playerGlowActive]);
 
   // Only for real unmount, not every board update -- see the note above.
   useEffect(() => {
@@ -572,6 +590,7 @@ export default function App() {
       consumedPlayerGlowRef.current = 0;
       if (playerGlowTimerRef.current) { clearTimeout(playerGlowTimerRef.current); playerGlowTimerRef.current = null; }
       setPlayerGlowActive(false);
+      setPlayerGlowBoard(null);
     }
     if (consumedPlayerGlowRef.current >= all.length) return;
     const fresh = all.slice(consumedPlayerGlowRef.current).filter((n) => n.controller === 0);
@@ -579,11 +598,17 @@ export default function App() {
     if (fresh.length === 0) return;
     // Only the hold window matters here (unlike the opponent queue, nothing
     // needs to visibly show each entry in turn) -- (re)arm once for
-    // whichever of this batch is latest.
+    // whichever of this batch is latest. Its snapshot (taken at that link's
+    // own "chaining" moment, before any later event in the same batch --
+    // e.g. an opponent's chained response -- had a chance to apply) is what
+    // displayBoard freezes on below, so nothing that happens *after* this
+    // link shows up early.
     if (playerGlowTimerRef.current) clearTimeout(playerGlowTimerRef.current);
     setPlayerGlowActive(true);
+    setPlayerGlowBoard(fresh[fresh.length - 1].board);
     playerGlowTimerRef.current = setTimeout(() => {
       setPlayerGlowActive(false);
+      setPlayerGlowBoard(null);
       playerGlowTimerRef.current = null;
     }, 1000);
   }, [board.chainNotices]);
@@ -844,10 +869,27 @@ export default function App() {
   // player's monsters) in one uninterrupted burst with nothing for a human
   // to decide in between, so the live board would otherwise already show
   // the end result before the Futsu/Murakumo notices ever got their turn.
-  // Every other piece of logic below (legal-zone guessing, prompts, ...)
+  // playerGlowBoard is the same idea for the player's own flash (checked
+  // second, since current -- an opponent notice -- only ever starts once
+  // playerGlowActive has cleared; see that queue-advance effect). Every
+  // other piece of logic below (legal-zone guessing, prompts, ...)
   // deliberately keeps reading the live `board`, not this -- only what's
   // actually painted on screen should lag.
-  const displayBoard = current?.board ?? board;
+  const displayBoard = current?.board ?? playerGlowBoard ?? board;
+  // Whether Board.tsx's own enlarge/glow cue should be showing at all --
+  // NOT the same thing as displayBoard resolving to a frozen snapshot vs.
+  // the live board. currentChainLocation (what Board derives enlargedKey
+  // from) only gets cleared by chain_end, so once the notice/flash window
+  // below ends and displayBoard falls back to the live `board`, that scalar
+  // is still sitting there set for the entire rest of the chain's
+  // resolution (e.g. through a follow-up cost/target-selection prompt on
+  // the same card) -- reproduced live as the glow staying "stuck" on
+  // through a whole selection phase instead of playing its normal ~1s
+  // pulse and clearing. Gating on the two windows that actually manage
+  // their own timing (the opponent-notice queue's `current`, until
+  // dismissed, and `playerGlowActive`'s 1s timer) keeps the glow scoped to
+  // just that.
+  const chainGlowActive = current !== null || playerGlowActive;
 
   function handlePhaseClick(x: number, y: number) {
     if (nonCard.length === 0) return;
@@ -1026,6 +1068,7 @@ export default function App() {
       <main className="app-main">
         <Board
           board={displayBoard}
+          glowActive={chainGlowActive}
           prompt={effectivePrompt}
           selection={selection}
           onCardMenu={handleCardMenu}
