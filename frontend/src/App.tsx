@@ -333,7 +333,7 @@ export default function App() {
   // One-time announcement modal, gated on a versioned localStorage key so
   // it shows once per new message (bump the suffix to re-show it to
   // everyone) rather than nagging on every single visit.
-  const WELCOME_BACK_KEY = "welcomeBackSeen_2026-08-13";
+  const WELCOME_BACK_KEY = "welcomeBackSeen_2026-08-13b";
   const [showWelcomeBack, setShowWelcomeBack] = useState(
     () => localStorage.getItem(WELCOME_BACK_KEY) !== "1",
   );
