@@ -402,9 +402,28 @@ class DuelEngine:
                 return POS_FACEDOWN_DEFENSE
             return POS_FACEUP_ATTACK if entry["position"] == "attack" else POS_FACEUP_DEFENSE
 
+        # "owner": "player"/"opponent" -- optional, only for a puzzle that
+        # starts with a monster already under Snatch Steal/Change of
+        # Heart-style stolen control: lets a card sit in one side's Monster
+        # Zone (controller, what every other placement already means here)
+        # while still belonging to the other side (true_owner) for GY/Deck
+        # return purposes. Omitted entirely, this is a no-op -- every
+        # existing puzzle's owner == controller, same as before this
+        # existed.
+        def true_owner_for(entry, default):
+            raw = entry.get("owner")
+            if raw is None:
+                return default
+            mapping = {"player": 0, "opponent": 1}
+            if raw not in mapping:
+                raise ValueError(
+                    f"{entry['name']!r}'s \"owner\" must be 'player' or 'opponent', got {raw!r}")
+            return mapping[raw]
+
         for i, entry in enumerate(puzzle.get("opponent_field", [])):
             card = self.resolved[entry["name"]]
-            self._place(card["code"], 1, LOCATION_MZONE, i, field_position(entry, card))
+            self._place(card["code"], 1, LOCATION_MZONE, i, field_position(entry, card),
+                        true_owner=true_owner_for(entry, default=1))
         # Direct puzzle["player_hand"]/["player_deck"]/["player_extra"] would
         # KeyError for a puzzle that omits one entirely (e.g. a puzzle whose
         # solve needs no further draws, so player_deck has nothing in it) --
@@ -439,7 +458,8 @@ class DuelEngine:
         # already banished, instead of only ever starting from hand/deck.
         for i, entry in enumerate(puzzle.get("player_field", [])):
             card = self.resolved[entry["name"]]
-            self._place(card["code"], 0, LOCATION_MZONE, i, field_position(entry, card))
+            self._place(card["code"], 0, LOCATION_MZONE, i, field_position(entry, card),
+                        true_owner=true_owner_for(entry, default=0))
         for i, name in enumerate(puzzle.get("player_banished", [])):
             self._place(self.resolved[name]["code"], 0, LOCATION_REMOVED, i, POS_FACEUP_ATTACK)
         # Symmetric with player_banished -- the Banished zone is public
@@ -502,8 +522,17 @@ class DuelEngine:
 
         self.stream = MessageStream(self.pduel)
 
-    def _place(self, code, owner, location, zone, position):
-        lib.new_card(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(code), ctypes.c_uint8(owner),
+    # `owner` here is really "controller" -- which physical side's zone the
+    # card lands in -- and true_owner (defaulting to the same value) is what
+    # ygopro-core's own new_card() calls `owner`, the side that regains it
+    # on any GY/Deck/Extra/Banished move. The two are the same for every
+    # normal placement; only a puzzle that starts mid-"Snatch Steal" (a
+    # card the player owns but the opponent currently controls) needs them
+    # to differ -- see opponent_field/player_field's own "owner" override.
+    def _place(self, code, owner, location, zone, position, true_owner=None):
+        if true_owner is None:
+            true_owner = owner
+        lib.new_card(ctypes.c_ssize_t(self.pduel), ctypes.c_uint32(code), ctypes.c_uint8(true_owner),
                      ctypes.c_uint8(owner), ctypes.c_uint8(location), ctypes.c_uint8(zone),
                      ctypes.c_uint8(position))
 
