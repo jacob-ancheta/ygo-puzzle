@@ -229,6 +229,65 @@ def build_puzzle_setup_script(puzzle, resolved):
                 f"local tgt = Duel.GetFieldCard({target_owner}, LOCATION_MZONE, {target_index}) "
                 f"if eq and tgt then Debug.PreEquip(eq, tgt) end end"
             )
+    # Optional -- "card_target": {"side", "index"} starts a face-up
+    # Continuous card already "targeting" a monster, via Debug.PreSetTarget
+    # (which is all ygopro-core's own SetCardTarget does: it feeds
+    # EFFECT_TYPE_TARGET effects like Shadow Spell's -700 ATK / cannot
+    # attack). Same shape as equip_target, but a *different* relation --
+    # PreEquip would not make those effects apply, so the two aren't
+    # interchangeable.
+    for owner, zone_key in ((0, "player_spelltrap"), (1, "opponent_spelltrap")):
+        for i, entry in enumerate(puzzle.get(zone_key, [])):
+            card_target = entry.get("card_target")
+            if not card_target:
+                continue
+            if entry.get("position") != "faceup":
+                raise ValueError(
+                    f"{entry['name']!r} in {zone_key} declares card_target but its position "
+                    f"is {entry.get('position')!r} -- only a face-up ('faceup') card can "
+                    "start already targeting something"
+                )
+            target_side = card_target.get("side")
+            if target_side not in SIDE_OWNER:
+                raise ValueError(
+                    f"{entry['name']!r}'s card_target needs \"side\": \"player\" or \"opponent\", "
+                    f"got {target_side!r}"
+                )
+            target_index = card_target.get("index")
+            if not isinstance(target_index, int):
+                raise ValueError(
+                    f"{entry['name']!r}'s card_target needs an integer \"index\" (position in "
+                    f"that side's *_field list), got {target_index!r}"
+                )
+            seq = entry.get("sequence", i)
+            lines.append(
+                f"do local src = Duel.GetFieldCard({owner}, LOCATION_SZONE, {seq}) "
+                f"local tgt = Duel.GetFieldCard({SIDE_OWNER[target_side]}, LOCATION_MZONE, {target_index}) "
+                f"if src and tgt then Debug.PreSetTarget(src, tgt) end end"
+            )
+    # Optional -- "attacker_atk_min": N narrows a Set attack-reactive Trap
+    # (e.g. Sakuretsu Armor) to only be legal against an attacker with at
+    # least N ATK, replicating the source puzzle scripts' own
+    # GetActivateEffect():SetCondition(function() return Duel.GetAttacker()
+    # and Duel.GetAttacker():IsAttackAbove(N) end) override. Without it the
+    # real card fires on any attack, which can make a puzzle designed
+    # around a threshold unsolvable (or trivially different).
+    for owner, zone_key in ((0, "player_spelltrap"), (1, "opponent_spelltrap")):
+        for i, entry in enumerate(puzzle.get(zone_key, [])):
+            min_atk = entry.get("attacker_atk_min")
+            if min_atk is None:
+                continue
+            if not isinstance(min_atk, int):
+                raise ValueError(
+                    f"{entry['name']!r}'s attacker_atk_min must be an integer, got {min_atk!r}")
+            seq = entry.get("sequence", i)
+            lines.append(
+                f"do local t = Duel.GetFieldCard({owner}, LOCATION_SZONE, {seq}) "
+                f"if t then local e = t:GetActivateEffect() "
+                f"if e then e:SetCondition(function() "
+                f"return Duel.GetAttacker() and Duel.GetAttacker():IsAttackAbove({min_atk}) "
+                f"end) end end end"
+            )
     return "\n".join(lines).encode()
 
 
@@ -1492,7 +1551,8 @@ def run(engine):
                                    and location == last_attack_target_location)
                 activate = engine.opponent_ai.should_activate(
                     masked_code, desc, last_chaining_code, last_chaining_controller,
-                    require_trigger=True, self_is_target=self_is_target)
+                    require_trigger=True, self_is_target=self_is_target,
+                    chain_codes=frozenset(chain_link_cards.values()))
                 if activate:
                     engine.opponent_ai.note_activated(masked_code, desc)
                 engine.send_i(1 if activate else 0)
@@ -1796,7 +1856,7 @@ def run(engine):
                 # must pick one regardless of policy.
                 choice = engine.opponent_ai.choose_chain(
                     chains, last_chaining_code, last_chaining_controller, last_attack_target_location,
-                    any_card_moved)
+                    any_card_moved, chain_codes=frozenset(chain_link_cards.values()))
                 if choice != -1:
                     engine.opponent_ai.note_activated(chains[choice][1], chains[choice][2])
                 engine.send_i(choice)

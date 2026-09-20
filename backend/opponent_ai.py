@@ -162,6 +162,15 @@ class OpponentAI:
                 # distinct cards/policies with no other way to express an
                 # explicit preference between them.
                 "priority": behaviour.get("priority"),
+                # Card name(s) this card refuses to share a chain with: if
+                # any of them is already a link on the chain being built,
+                # this one passes even when otherwise legal. Meant for a
+                # puzzle whose opponent holds two reactive cards that
+                # shouldn't stack (e.g. Torrential Tribute + Two-Pronged
+                # Attack) -- the first one taken wins, the other sits out
+                # for the rest of that chain. Resolved like `target` (names
+                # -> codes), and only ever restricts, never forces.
+                "exclusive_with": _resolve_names(behaviour.get("exclusive_with")),
             }
 
         # Keyed by (code, desc) rather than just code -- a card like
@@ -184,9 +193,15 @@ class OpponentAI:
     # ---- whether-to-activate decisions ----
 
     def should_activate(self, code, desc, trigger_code=None, trigger_controller=None, require_trigger=False,
-                         self_is_target=False, any_card_moved=True):
+                         self_is_target=False, any_card_moved=True, chain_codes=frozenset()):
         policy = self.policies.get(code)
         if not policy:
+            return False
+        exclusive_with = policy.get("exclusive_with")
+        if exclusive_with and not exclusive_with.isdisjoint(chain_codes):
+            # Not a matching opportunity at all (doesn't consume "first"),
+            # same reasoning as the respond_to/avoid misses below -- one of
+            # the cards this refuses to share a chain with is already on it.
             return False
         # MSG_SELECT_EFFECTYN's "you may activate this specific effect?"
         # yes/no has no other candidate to disambiguate against, unlike
@@ -247,7 +262,7 @@ class OpponentAI:
         return True
 
     def choose_chain(self, chains, trigger_code, trigger_controller=None, attack_target_location=None,
-                      any_card_moved=True):
+                      any_card_moved=True, chain_codes=frozenset()):
         """chains: list of (forced, code, desc, location). Returns an index
         to pick, or -1 to pass (only meaningful when nothing in the list is
         forced). Among several simultaneously-legal, non-forced candidates,
@@ -270,13 +285,15 @@ class OpponentAI:
             for i, (forced, code, desc, location) in enumerate(chains):
                 if forced and self.should_activate(code, desc, trigger_code, trigger_controller,
                                                      self_is_target=is_target(location),
-                                                     any_card_moved=any_card_moved):
+                                                     any_card_moved=any_card_moved,
+                                                     chain_codes=chain_codes):
                     return i
             return next(i for i, (forced, _, _, _) in enumerate(chains) if forced)
         candidates = [i for i, (_forced, code, desc, location) in enumerate(chains)
                       if self.should_activate(code, desc, trigger_code, trigger_controller,
                                                self_is_target=is_target(location),
-                                               any_card_moved=any_card_moved)]
+                                               any_card_moved=any_card_moved,
+                                               chain_codes=chain_codes)]
         if not candidates:
             return -1
         # min() is stable -- ties (including the all-unset default) resolve
