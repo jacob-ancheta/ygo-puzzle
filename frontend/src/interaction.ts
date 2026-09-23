@@ -68,7 +68,21 @@ export function idleBattleOptionsFor(prompt: Record<string, unknown> | null, cod
   const matches = options
     .map((option, idx) => ({ option, idx }))
     .filter(({ option }) => option.card && option.card.code === code);
-  if (!loc || loc.location_id === LOC.HAND) return dedupeByCategory(matches);
+  if (!loc || loc.location_id === LOC.HAND) {
+    // Still needs a zone filter, just a looser one than the field branch
+    // below (hand copies are interchangeable, so exact sequence isn't
+    // meaningful -- only "is this option's card actually in the hand at
+    // all" is). Without this, a same-code card also sitting on the field
+    // (e.g. one Green Gadget in hand, another already on the field) leaked
+    // that field copy's own options -- Change Position, Activate Effect --
+    // into the hand copy's menu too, since both share one card code and
+    // this branch used to match on code alone. A field click never had
+    // this problem: it already goes through the exact-zone branch below.
+    const handMatches = matches.filter(({ option }) => option.location
+      && option.location.location_id === LOC.HAND
+      && option.location.controller === (loc?.controller ?? 0));
+    return dedupeByCategory(handMatches);
+  }
   return matches.filter(({ option }) => option.location
     && option.location.controller === loc.controller
     && option.location.location_id === loc.location_id
